@@ -1,0 +1,113 @@
+[project]
+name = "ariadne-tracking"
+version = "1.0.0"
+description = "Distributed Multi-Camera Tracking & Re-Identification Framework"
+readme = "README.md"
+requires-python = ">=3.10"
+license = {text = "MIT"}
+authors = [
+    {name = "Giuseppe Paolo Esposito"},
+]
+
+dependencies = [
+    "ultralytics>=8.3.0",
+    "opencv-python>=4.8.0",
+    "tqdm>=4.66.0",
+    "pyyaml>=6.0",
+    "numpy>=1.24.0",
+    "requests>=2.28.0",
+    "yacs>=0.1.8",
+    "rich>=13.0.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=7.0",
+    "pytest-cov>=4.0",
+    "ruff>=0.4.0",
+    "mypy>=1.10.0",
+    "types-requests>=2.31.0",
+    "types-PyYAML>=6.0",
+]
+
+# ── Pytest ────────────────────────────────────────────────────
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["src"]
+addopts = "-v --tb=short"
+
+# ── Ruff ──────────────────────────────────────────────────────
+
+[tool.ruff]
+target-version = "py310"
+line-length = 100
+src = ["src", "tests"]
+
+[tool.ruff.lint]
+select = [
+    "F",      # pyflakes — variabili/import inutilizzati, errori logici
+    "E",      # pycodestyle errors — stile PEP 8
+    "W",      # pycodestyle warnings
+    "I",      # isort — ordine import
+    "N",      # pep8-naming — convenzioni nomi
+    "UP",     # pyupgrade — sintassi moderna Python 3.10+
+    "B",      # flake8-bugbear — bug comuni e anti-pattern
+    "A",      # flake8-builtins — shadowing di builtin
+    "SIM",    # flake8-simplify — semplificazioni codice
+    "RUF",    # Ruff-specifiche
+    "C4",     # flake8-comprehensions — list/dict/set comprehension
+    "PIE",    # flake8-pie — codice inutile
+    "RET",    # flake8-return — return superflui/inconsistenti
+    "PT",     # flake8-pytest-style
+    "T20",    # flake8-print — print() rimasti nel codice
+    "ERA",    # eradicate — codice commentato
+    "TCH",    # flake8-type-checking — import solo per type hints
+]
+ignore = [
+    "E501",   # line too long (gestito dal formatter)
+    "RET504", # unnecessary assignment before return
+    "N999",   # i nomi 00_, 01_ sono intenzionali per ordinamento
+    "RUF001", # caratteri Unicode intenzionali (×, –, →) nelle stringhe italiane
+    "RUF002", # idem per docstring
+    "ERA001", # i commenti separatori di sezione (═══) non sono codice commentato
+]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/*" = ["T20"]  # print ok nei test
+
+[tool.ruff.lint.isort]
+known-first-party = ["config", "utils"]
+
+# ── Mypy ──────────────────────────────────────────────────────
+
+[tool.mypy]
+python_version = "3.10"
+mypy_path = ["src"]
+explicit_package_bases = true
+warn_return_any = true
+warn_unused_configs = true
+warn_unused_ignores = true
+warn_redundant_casts = true
+check_untyped_defs = true
+disallow_untyped_defs = false
+no_implicit_optional = true
+
+[[tool.mypy.overrides]]
+module = [
+    "ultralytics.*",
+    "cv2.*",
+    "tqdm.*",
+    "rich.*",
+    "yacs.*",
+    "numpy.*",
+    "torch.*",
+]
+ignore_missing_imports = true
+follow_imports = "skip"
+
+# ── Build system ──────────────────────────────────────────────
+
+[build-system]
+requires = ["setuptools>=68.0"]
+build-backend = "setuptools.backends._legacy:_Backend"

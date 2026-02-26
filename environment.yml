@@ -1,0 +1,47 @@
+# Ariadne Tracking — Pinned environment
+# Aggiornato il 2026-02-25.
+# Ricrea con:  conda env create -f environment.yml
+# Aggiorna con: conda env update -f environment.yml --prune
+
+name: ariadne_env
+channels:
+  - defaults
+  - pytorch
+  - nvidia
+
+dependencies:
+  - python=3.10.19
+
+  - pip:
+      # ── PyTorch + CUDA ─────────────────────────────────
+      - torch==2.10.0+cu126
+      - torchvision==0.25.0+cu126
+      - torchaudio==2.10.0+cu126
+
+      # ── Detection + Tracking ──────────────────────────
+      - ultralytics==8.4.14
+
+      # ── Computer Vision + Numerica ───────────────────
+      - opencv-python==4.13.0.92
+      - numpy==2.2.6
+
+      # ── Utilità ─────────────────────────────────────
+      - tqdm==4.67.3
+      - pyyaml==6.0.3
+      - requests==2.32.5      - rich>=13.0.0
+      # ── TensorRT (opzionale, per --tensorrt) ──────────
+      - tensorrt==10.15.1.29
+      - onnx==1.20.1
+      - onnxruntime-gpu==1.23.2
+      - onnxslim==0.1.85
+
+      # ── Re-Identification ──────────────────
+      - yacs==0.1.8
+
+      # ── Sviluppo ────────────────────────────────────
+      - pytest==9.0.2
+      - pytest-cov==7.0.0      - ruff>=0.4.0
+      - mypy>=1.10.0
+      - types-requests>=2.31.0
+      - types-PyYAML>=6.0
+      - pre-commit>=4.0.0

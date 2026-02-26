@@ -1,0 +1,21 @@
+{
+    "include": [
+        "src",
+        "tests"
+    ],
+    "pythonVersion": "3.10",
+    "typeCheckingMode": "basic",
+    "reportAttributeAccessIssue": false,
+    "reportOptionalMemberAccess": false,
+    "extraPaths": [
+        "src"
+    ],
+    "ignore": [
+        "**/node_modules"
+    ],
+    "executionEnvironments": [
+        {
+            "root": "src"
+        }
+    ]
+}

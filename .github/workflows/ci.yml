@@ -1,0 +1,73 @@
+# ═══════════════════════════════════════════════════════════════
+# CI — Code Quality (ruff + mypy + pytest)
+# Gira su ogni push/PR verso main.
+# ═══════════════════════════════════════════════════════════════
+
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+# Cancella run precedenti sulla stessa branch
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  # ── 1. Lint + Format check ──────────────────────────────────
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Ruff lint
+        uses: astral-sh/ruff-action@v3
+        with:
+          args: check src/
+
+      - name: Ruff format check
+        uses: astral-sh/ruff-action@v3
+        with:
+          args: format --check src/
+
+  # ── 2. Type checking ───────────────────────────────────────
+  typecheck:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.10"
+
+      - name: Install dependencies
+        run: |
+          pip install --upgrade pip
+          pip install mypy types-requests types-PyYAML
+
+      - name: Mypy
+        run: python -m mypy src/ --config-file=pyproject.toml
+
+  # ── 3. Test ─────────────────────────────────────────────────
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.10"
+
+      - name: Install dependencies
+        run: |
+          pip install --upgrade pip
+          pip install pyyaml numpy requests tqdm rich
+          pip install pytest pytest-cov
+
+      - name: Run tests
+        run: python -m pytest tests/ -v --tb=short

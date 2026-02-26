@@ -1,4 +1,4 @@
-# Byte-compiled / optimized / DLL files
+#Byte-compiled / optimized / DLL files
 __pycache__/
 *.py[codz]
 *$py.class
@@ -96,6 +96,9 @@ venv.bak/
 # Ruff stuff:
 .ruff_cache/
 
+# Mypy
+.mypy_cache/
+
 # PyPI configuration file
 .pypirc
 
@@ -109,44 +112,52 @@ marimo/_lsp/
 __marimo__/
 
 # -----------------------------------------------------------
-# --- SEZIONE ARIADNE---
+# --- SEZIONE ARIADNE (Project Specific) ---
 # -----------------------------------------------------------
-.vscode/
 
-# 1. Modelli AI
+# 1. Modelli AI & Pesi (file pesanti, versionati separatamente)
 *.pt
 *.pth
 *.onnx
 *.tflite
 *.pb
-
-# 2. Ottimizzazione TensorRT (I file .engine RTX 3060)
 *.engine
 *.trt
+weights/
+checkpoints/
 
-# 3. Dataset e Media (Video di test e immagini)
-*.mp4
-*.avi
-*.mov
-*.mkv
-*.webm
-*.jpg
-*.jpeg
-*.png
-*.bmp
-
-# 4. Cartelle di dati specifici
-data/
+# 2. Dataset e Media (video, immagini ROI, annotation bbox)
+data/raw/videos/*.avi
+data/raw/videos/*.mp4
+data/raw/videos/*.mov
+data/raw/videos/*.mkv
+data/raw/videos/*.webm
+data/processed/extracted_rois/*/
 datasets/
 test_videos/
+gallery/
 
-# 5. Output di Ultralytics
+# 3. Logs & Outputs di Training/Inference
 runs/
 wandb/
+logs/
+output/logs/
+cache/
+__pycache__/
 
-# 6. Ambiente Conda
+# Mantieni i .gitkeep, i file di configurazione e i metadati
+!.gitkeep
+!configs/*.yaml
+!data/raw/videos/mevid-v1-video-URLS.txt
+
+# 4. Ambienti Virtuali & IDE
 ariadne_env/
+.vscode/
+.idea/
 
-# 7. File di sistema indesiderati
+# 5. File di Sistema e Temporanei
 .DS_Store
 Thumbs.db
+ehthumbs.db
+*.log
+*.tmp

@@ -1,0 +1,142 @@
+{
+  "elapsed_sec": 2214.09,
+  "model": "C:\\Users\\espos\\Desktop\\Universita\\Progetti\\ariadne-tracking\\models\\yolo26n.pt",
+  "backend": "TensorRT FP16",
+  "engine": "C:\\Users\\espos\\Desktop\\Universita\\Progetti\\ariadne-tracking\\models\\yolo26n_fp16_640.engine",
+  "imgsz": 640,
+  "conf_threshold": 0.5,
+  "frame_skip": 3,
+  "resize": [
+    128,
+    256
+  ],
+  "seed": 67,
+  "videos": [
+    {
+      "video": "2018-03-11.14-05-01.14-10-01.school.G328.r13",
+      "frames": 9000,
+      "rois": 15,
+      "tracks": 6,
+      "elapsed_sec": 402.56,
+      "processing_fps": 22.4,
+      "quality": {
+        "avg_sharpness": 18.8,
+        "good_rois": 0,
+        "bad_rois": 15
+      },
+      "discarded": {
+        "low_conf": 0,
+        "frame_skip": 440,
+        "invalid_roi": 222,
+        "imwrite_failed": 0
+      },
+      "skipped": false,
+      "error": null
+    },
+    {
+      "video": "2018-03-11.14-05-01.14-10-01.school.G339.r13",
+      "frames": 9000,
+      "rois": 40,
+      "tracks": 5,
+      "elapsed_sec": 309.78,
+      "processing_fps": 29.1,
+      "quality": {
+        "avg_sharpness": 109.6,
+        "good_rois": 28,
+        "bad_rois": 12
+      },
+      "discarded": {
+        "low_conf": 0,
+        "frame_skip": 73,
+        "invalid_roi": 1,
+        "imwrite_failed": 0
+      },
+      "skipped": false,
+      "error": null
+    },
+    {
+      "video": "2018-03-11.14-05-01.14-10-01.school.G419.r13",
+      "frames": 9001,
+      "rois": 477,
+      "tracks": 12,
+      "elapsed_sec": 421.91,
+      "processing_fps": 21.3,
+      "quality": {
+        "avg_sharpness": 1789.8,
+        "good_rois": 477,
+        "bad_rois": 0
+      },
+      "discarded": {
+        "low_conf": 0,
+        "frame_skip": 982,
+        "invalid_roi": 28,
+        "imwrite_failed": 0
+      },
+      "skipped": false,
+      "error": null
+    },
+    {
+      "video": "2018-03-11.14-05-01.14-10-01.school.G421.r13",
+      "frames": 9001,
+      "rois": 442,
+      "tracks": 7,
+      "elapsed_sec": 424.01,
+      "processing_fps": 21.2,
+      "quality": {
+        "avg_sharpness": 1093.8,
+        "good_rois": 438,
+        "bad_rois": 4
+      },
+      "discarded": {
+        "low_conf": 0,
+        "frame_skip": 870,
+        "invalid_roi": 0,
+        "imwrite_failed": 0
+      },
+      "skipped": false,
+      "error": null
+    },
+    {
+      "video": "2018-05-16.14-25-01.14-30-01.school.G639.r13",
+      "frames": 9001,
+      "rois": 484,
+      "tracks": 21,
+      "elapsed_sec": 317.11,
+      "processing_fps": 28.4,
+      "quality": {
+        "avg_sharpness": 283.2,
+        "good_rois": 343,
+        "bad_rois": 141
+      },
+      "discarded": {
+        "low_conf": 0,
+        "frame_skip": 958,
+        "invalid_roi": 17,
+        "imwrite_failed": 0
+      },
+      "skipped": false,
+      "error": null
+    },
+    {
+      "video": "2018-05-16.14-25-08.14-30-08.school.G336.r13",
+      "frames": 9006,
+      "rois": 1061,
+      "tracks": 14,
+      "elapsed_sec": 337.39,
+      "processing_fps": 26.7,
+      "quality": {
+        "avg_sharpness": 133.3,
+        "good_rois": 816,
+        "bad_rois": 245
+      },
+      "discarded": {
+        "low_conf": 0,
+        "frame_skip": 2254,
+        "invalid_roi": 79,
+        "imwrite_failed": 0
+      },
+      "skipped": false,
+      "error": null
+    }
+  ]
+}

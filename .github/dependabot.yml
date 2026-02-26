@@ -1,0 +1,29 @@
+# ═══════════════════════════════════════════════════════════════
+# Dependabot — Aggiornamento automatico dipendenze
+# Apre PR automatiche quando escono nuove versioni.
+# ═══════════════════════════════════════════════════════════════
+
+version: 2
+
+updates:
+  # Dipendenze Python (pip)
+  - package-ecosystem: pip
+    directory: /
+    schedule:
+      interval: weekly
+      day: monday
+    labels:
+      - dependencies
+      - python
+    open-pull-requests-limit: 5
+
+  # GitHub Actions
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+      day: monday
+    labels:
+      - dependencies
+      - ci
+    open-pull-requests-limit: 3

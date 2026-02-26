@@ -1,0 +1,35 @@
+# Pre-commit hooks — quality gate locale prima di ogni commit.
+# Installazione:  pre-commit install
+# Run manuale:    pre-commit run --all-files
+# Aggiornamento:  pre-commit autoupdate
+
+repos:
+  # ── Ruff: lint + format in un unico tool ────────────────────
+  - repo: https://github.com/astral-sh/ruff-pre-commit
+    rev: v0.15.2
+    hooks:
+      - id: ruff # lint
+        args: [--fix, --exit-non-zero-on-fix]
+      - id: ruff-format # formatter
+
+  # ── Mypy: type checking statico ─────────────────────────────
+  - repo: https://github.com/pre-commit/mirrors-mypy
+    rev: v1.19.1
+    hooks:
+      - id: mypy
+        args: [--config-file=pyproject.toml, --no-warn-unused-ignores]
+        additional_dependencies:
+          - types-requests>=2.31.0
+          - types-PyYAML>=6.0
+
+  # ── Hook generici ─
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v6.0.0
+    hooks:
+      - id: trailing-whitespace
+      - id: end-of-file-fixer
+      - id: check-yaml
+      - id: check-merge-conflict
+      - id: check-added-large-files
+        args: [--maxkb=5000] # blocca file > 5 MB (modelli, video)
+      - id: debug-statements # blocca breakpoint() / pdb rimasti

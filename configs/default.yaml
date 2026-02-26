@@ -1,0 +1,32 @@
+# ═══════════════════════════════════════════════════════════════
+# Configurazione di default — Modulo 1 (Tracker + Extractor)
+# ═══════════════════════════════════════════════════════════════
+# Ogni parametro qui corrisponde a un flag CLI.
+# Il CLI ha precedenza: se si passa da cli --conf 0.6, sovrascrive il valore qui.
+
+# ── Detection ─────────────────────────────────────────────────
+model: "models/yolo26n.pt"
+imgsz: 640 # multiplo di 32 — risoluzione input YOLO
+conf: 0.50 # soglia confidenza detection (0.0, 1.0]
+
+# ── Tracking ──────────────────────────────────────────────────
+tracker: "botsort.yaml" # algoritmo di tracking (file YAML ultralytics)
+
+# ── ROI extraction ────────────────────────────────────────────
+frame_skip: 3 # salva 1 ROI ogni N apparizioni per track
+padding_ratio: 0.05 # espansione bbox (5% per lato)
+min_width: 32 # larghezza minima ROI in pixel
+min_height: 64 # altezza minima ROI in pixel
+max_aspect_ratio: 1.5 # w/h massimo per sagoma umana plausibile
+roi_resize: [128, 256] # [w, h] — standard MEVID
+jpeg_quality: 95 # qualità JPEG (1-100)
+
+# ── GPU optimization ──────────────────────────────────────────
+tensorrt: false # inferenza TensorRT FP16
+
+# ── I/O ───────────────────────────────────────────────────────
+input_dir: "data/raw/videos"
+output_dir: "data/processed/extracted_rois"
+
+# ── Reproducibility ───────────────────────────────────────────
+seed: 67
