@@ -440,10 +440,10 @@ def process_single_video(
         for frame_result in results:
             frame = frame_result.orig_img
 
-            if frame_result.boxes.id is not None:  # type: ignore[union-attr]
-                boxes = frame_result.boxes.xyxy.cpu().numpy()  # type: ignore[union-attr]
-                track_ids = frame_result.boxes.id.int().cpu().numpy()  # type: ignore[union-attr]
-                confs = frame_result.boxes.conf.cpu().numpy()  # type: ignore[union-attr]
+            if frame_result.boxes.id is not None:
+                boxes = frame_result.boxes.xyxy.cpu().numpy()
+                track_ids = frame_result.boxes.id.int().cpu().numpy()
+                confs = frame_result.boxes.conf.cpu().numpy()
 
                 for box, track_id, conf in zip(boxes, track_ids, confs, strict=True):
                     x1, y1, x2, y2 = map(int, box)
