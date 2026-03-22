@@ -17,7 +17,7 @@ numpy>=1.24.0
 # Barra di progresso nel terminale
 tqdm>=4.66.0
 
-# Parsing configurazione YAML
+# Parsing configurazione (richiesto da ultralytics e yacs/CCReID)
 pyyaml>=6.0
 
 # Download dataset MEVID

@@ -25,9 +25,9 @@ import shutil
 import sys
 import time
 from collections import defaultdict
+from dataclasses import asdict, dataclass, field
 from datetime import datetime
 from pathlib import Path
-from typing import Any
 
 import cv2
 import numpy as np
@@ -48,9 +48,11 @@ from config import (
     LOG_DIR,
     PERSON_CLASS_ID,
     ROI_RESIZE,
+    SHARPNESS_THRESHOLD,
     VIDEO_EXTENSIONS,
 )
 from utils import (
+    VideoInfo,
     get_engine_path,
     get_video_info,
     is_valid_roi,
@@ -58,19 +60,12 @@ from utils import (
     roi_sharpness,
 )
 
+# ── Rich (opzionale, per logging colorato e tabella riepilogo) ─
+
 try:
     from rich.console import Console
     from rich.logging import RichHandler
     from rich.panel import Panel
-    from rich.progress import (
-        BarColumn,
-        MofNCompleteColumn,
-        Progress,
-        SpinnerColumn,
-        TextColumn,
-        TimeElapsedColumn,
-        TimeRemainingColumn,
-    )
     from rich.table import Table
 
     _RICH = True
@@ -81,56 +76,119 @@ log = logging.getLogger(__name__)
 
 
 # ══════════════════════════════════════════════════════════════
+# Dataclass — risultati tipizzati
+# ══════════════════════════════════════════════════════════════
+
+
+@dataclass
+class QualityStats:
+    """Metriche di qualità aggregate delle ROI estratte."""
+
+    avg_sharpness: float = 0.0
+    good_rois: int = 0
+    bad_rois: int = 0
+
+
+@dataclass
+class DiscardStats:
+    """Conteggio delle ROI scartate, suddiviso per motivo.
+
+    - ``frame_skip``     — scartate dalla regola 1-ogni-N.
+    - ``invalid_roi``    — troppo piccole o con aspect ratio anomalo.
+    - ``imwrite_failed`` — errore di scrittura su disco.
+    """
+
+    frame_skip: int = 0
+    invalid_roi: int = 0
+    imwrite_failed: int = 0
+
+
+@dataclass
+class VideoResult:
+    """Risultato dell'elaborazione di un singolo video."""
+
+    video: str
+    frames: int = 0
+    rois: int = 0
+    tracks: int = 0
+    elapsed_sec: float = 0.0
+    processing_fps: float = 0.0
+    quality: QualityStats = field(default_factory=QualityStats)
+    discarded: DiscardStats = field(default_factory=DiscardStats)
+    skipped: bool = False
+    error: str | None = None
+
+
+@dataclass
+class ROIRecord:
+    """Singolo record di una ROI salvata (finisce in ``metadata.json``)."""
+
+    track_id: int
+    frame_idx: int
+    timestamp: float
+    bbox_original: tuple[int, int, int, int]
+    bbox_padded: tuple[int, int, int, int]
+    confidence: float
+    sharpness: float
+    file: str
+
+
+# ══════════════════════════════════════════════════════════════
+# Eccezione di configurazione
+# ══════════════════════════════════════════════════════════════
+
+
+class ConfigError(ValueError):
+    """Parametri CLI non validi — catturata in ``main()`` per uscire con codice 1.
+
+    Lanciare un'eccezione invece di chiamare ``sys.exit()`` direttamente
+    rende ``validate_args`` testabile: nei test si può fare
+    ``with pytest.raises(ConfigError)`` senza che il processo termini.
+    """
+
+
+# ══════════════════════════════════════════════════════════════
 # Logging (console + file)
 # ══════════════════════════════════════════════════════════════
 
 
 def setup_logging() -> Path | None:
-    """
-    Configura logging su console e su file.
+    """Configura logging su console (Rich o plain) e su file.
 
-    Il file di log viene salvato in output/logs/run_YYYYMMDD_HHMMSS.log
-    così che ogni esecuzione abbia il suo log persistente e non si
-    perdano informazioni se il terminale viene chiuso.
-
-    Se ``rich`` è installato, la console usa colori e formattazione avanzata.
+    Il file viene creato in ``output/logs/run_<timestamp>.log``.
+    Il guard ``if root.handlers`` evita handler duplicati se la funzione
+    viene chiamata più volte (ad es. nei test).
     """
     root = logging.getLogger()
+    if root.handlers:
+        return None
     root.setLevel(logging.INFO)
 
-    # Formato per il file di log (sempre plain text)
-    file_fmt = logging.Formatter(
-        "%(asctime)s [%(levelname)s] %(message)s",
-        datefmt="%H:%M:%S",
-    )
+    fmt = logging.Formatter("%(asctime)s [%(levelname)s] %(message)s", datefmt="%H:%M:%S")
 
-    # Console handler: rich se disponibile, altrimenti plain
-    console_handler: logging.Handler
+    # Console handler: Rich (colori) se disponibile, altrimenti plain
     if _RICH:
-        console_handler = RichHandler(
+        ch: logging.Handler = RichHandler(
             show_time=True,
             show_path=False,
             markup=True,
             rich_tracebacks=True,
         )
-        console_handler.setFormatter(logging.Formatter("%(message)s"))
+        ch.setFormatter(logging.Formatter("%(message)s"))
     else:
-        console_handler = logging.StreamHandler(sys.stdout)
-        console_handler.setFormatter(file_fmt)
-
-    root.addHandler(console_handler)
+        ch = logging.StreamHandler(sys.stdout)
+        ch.setFormatter(fmt)
+    root.addHandler(ch)
 
     # File handler
     try:
         LOG_DIR.mkdir(parents=True, exist_ok=True)
-        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        log_file = LOG_DIR / f"run_{timestamp}.log"
+        log_file = LOG_DIR / f"run_{datetime.now().strftime('%Y%m%d_%H%M%S')}.log"
         fh = logging.FileHandler(log_file, encoding="utf-8")
-        fh.setFormatter(file_fmt)
+        fh.setFormatter(fmt)
         root.addHandler(fh)
         return log_file
     except OSError:
-        # Se non riesce a creare la directory/file di log, continua solo con console
         return None
 
 
@@ -140,11 +198,7 @@ def setup_logging() -> Path | None:
 
 
 def set_seed(seed: int) -> None:
-    """Imposta seed per riproducibilità su Python, NumPy e PyTorch.
-
-    Args:
-        seed: Valore intero del seed da applicare.
-    """
+    """Fissa il seed su Python, NumPy e PyTorch per riproducibilità."""
     random.seed(seed)
     np.random.seed(seed)
     torch.manual_seed(seed)
@@ -158,92 +212,53 @@ def set_seed(seed: int) -> None:
 
 
 def parse_args() -> argparse.Namespace:
-    """Definisce e restituisce i parametri da riga di comando.
+    """Definisce i parametri CLI e restituisce il Namespace parsato."""
 
-    Returns:
-        Namespace con tutti i flag CLI (input_dir, output_dir, model, conf, ecc.).
-    """
-    p = argparse.ArgumentParser(description="Modulo 1 – Detection + Tracking → ROI extraction")
-    p.add_argument(
-        "--input-dir",
-        default=str(DEFAULT_INPUT_DIR),
-        help="Cartella con i video sorgente",
+    p = argparse.ArgumentParser(
+        description="Modulo 1 – Detection + Tracking → ROI extraction",
     )
-    p.add_argument(
-        "--output-dir",
-        default=str(DEFAULT_OUTPUT_DIR),
-        help="Cartella di output per le ROI",
-    )
-    p.add_argument(
-        "--model",
-        default=str(DEFAULT_MODEL_PATH),
-        help="Path al modello YOLO (.pt)",
-    )
-    p.add_argument(
-        "--conf",
-        type=float,
-        default=DEFAULT_CONF,
-        help="Soglia minima di confidenza (0.0–1.0)",
-    )
+
+    # ── Path e modello ────────────────────────────────────────
+    p.add_argument("--input-dir", default=str(DEFAULT_INPUT_DIR), help="Cartella video sorgente")
+    p.add_argument("--output-dir", default=str(DEFAULT_OUTPUT_DIR), help="Cartella output ROI")
+    p.add_argument("--model", default=str(DEFAULT_MODEL_PATH), help="Path modello YOLO (.pt)")
+
+    # ── Parametri pipeline ────────────────────────────────────
+    p.add_argument("--conf", type=float, default=DEFAULT_CONF, help="Soglia confidenza (0–1)")
     p.add_argument(
         "--frame-skip",
         type=int,
         default=DEFAULT_FRAME_SKIP,
-        help="Salva 1 ROI ogni N frame per track",
+        help="Salva 1 ROI ogni N frame",
     )
     p.add_argument(
         "--imgsz",
         type=int,
         default=DEFAULT_IMGSZ,
-        help="Risoluzione di input per YOLO (multiplo di 32)",
+        help="Risoluzione YOLO (multiplo di 32)",
     )
-    p.add_argument(
-        "--no-resize",
-        action="store_true",
-        help="Non ridimensionare le ROI a 128×256",
-    )
-    p.add_argument(
-        "--seed",
-        type=int,
-        default=DEFAULT_SEED,
-        help="Seed per riproducibilità (default: 67)",
-    )
+    p.add_argument("--seed", type=int, default=DEFAULT_SEED, help="Seed riproducibilità")
+    p.add_argument("--max-videos", type=int, default=0, help="Limita a N video (0 = tutti)")
 
-    # ── Ottimizzazione GPU ────────────────────────────────────
-    p.add_argument(
-        "--tensorrt",
-        action="store_true",
-        help="Esporta in TensorRT FP16 e usa il motore ottimizzato",
-    )
-
-    # ── Opzioni avanzate ──────────────────────────────────────
-    p.add_argument(
-        "--show",
-        action="store_true",
-        help="Mostra finestra di preview con le detection in tempo reale",
-    )
-    p.add_argument(
-        "--force",
-        action="store_true",
-        help="Rielabora video già completati (ignora metadata.json esistente)",
-    )
+    # ── Flag booleani ─────────────────────────────────────────
+    p.add_argument("--no-resize", action="store_true", help="Non ridimensionare le ROI a 128×256")
+    p.add_argument("--tensorrt", action="store_true", help="Usa TensorRT FP16 (richiede CUDA)")
+    p.add_argument("--show", action="store_true", help="Preview detection in tempo reale")
+    p.add_argument("--force", action="store_true", help="Rielabora video già completati")
 
     return p.parse_args()
 
 
 def validate_args(args: argparse.Namespace) -> None:
-    """Valida i parametri CLI; termina il processo con ``sys.exit(1)`` se non sono coerenti.
-
-    Args:
-        args: Namespace restituito da :func:`parse_args`.
+    """Valida i parametri CLI.
 
     Raises:
-        SystemExit: Se uno o più parametri non superano la validazione.
+        ConfigError: Se uno o più parametri non sono coerenti.
     """
     errors: list[str] = []
 
     if not (0.0 < args.conf <= 1.0):
-        errors.append(f"--conf deve essere in (0.0, 1.0], ricevuto: {args.conf:.4f}")
+        errors.append(f"--conf deve essere in (0, 1], ricevuto: {args.conf}")
     if args.frame_skip < 1:
         errors.append(f"--frame-skip deve essere >= 1, ricevuto: {args.frame_skip}")
     if args.imgsz < 32 or args.imgsz % 32 != 0:
@@ -256,9 +271,7 @@ def validate_args(args: argparse.Namespace) -> None:
         errors.append("--tensorrt richiede CUDA, ma torch.cuda non è disponibile")
 
     if errors:
-        for msg in errors:
-            log.error(msg)
-        sys.exit(1)
+        raise ConfigError("\n".join(errors))
 
 
 # ══════════════════════════════════════════════════════════════
@@ -266,73 +279,112 @@ def validate_args(args: argparse.Namespace) -> None:
 # ══════════════════════════════════════════════════════════════
 
 
-def load_model(args: argparse.Namespace) -> YOLO:
+def load_model(model_path: str, imgsz: int, *, use_tensorrt: bool = False) -> YOLO:
+    """Carica YOLO nella modalità più veloce disponibile.
+
+    Priorità: engine TensorRT esistente → export TRT → PyTorch .pt.
+
+    Args:
+        model_path:   Path al file .pt del modello.
+        imgsz:        Risoluzione di input (per il nome dell'engine).
+        use_tensorrt: Se True, cerca/crea un engine TRT FP16.
     """
-    Carica il modello nella modalità più veloce disponibile.
+    engine = get_engine_path(model_path, imgsz)
 
-    Priorità: TensorRT .engine già compilato > export TRT > PyTorch (.pt).
-    """
-    engine_path = get_engine_path(args.model, args.imgsz)
+    if not use_tensorrt:
+        log.info("Caricamento modello PyTorch: %s", model_path)
+        return YOLO(model_path, task="detect")
 
-    if args.tensorrt:
-        if engine_path.exists():
-            log.info("Caricamento motore TensorRT: %s", engine_path)
-            return YOLO(str(engine_path), task="detect")
+    if engine.exists():
+        log.info("Caricamento motore TensorRT: %s", engine)
+        return YOLO(str(engine), task="detect")
 
-        log.info("Export TensorRT FP16 in corso (una tantum, ~2-5 min)...")
-        log.info("  Sorgente : %s", args.model)
-        log.info("  imgsz    : %d", args.imgsz)
-        log.info("  Output   : %s", engine_path)
-
-        base_model = YOLO(args.model, task="detect")
-        exported_path = base_model.export(
-            format="engine",
-            half=True,
-            imgsz=args.imgsz,
-            simplify=True,
-            device=0,
-        )
-
-        exported = Path(exported_path)
-        if exported != engine_path:
-            shutil.move(str(exported), str(engine_path))
-
-        log.info("Export completato → %s", engine_path)
-        return YOLO(str(engine_path), task="detect")
-
-    log.info("Caricamento modello PyTorch: %s", args.model)
-    return YOLO(args.model, task="detect")
+    # Export TensorRT FP16 (una tantum, ~2-5 min)
+    log.info("Export TensorRT FP16 in corso (una tantum)...")
+    base = YOLO(model_path, task="detect")
+    exported = Path(
+        base.export(format="engine", half=True, imgsz=imgsz, simplify=True, device=0),
+    )
+    if exported != engine:
+        shutil.move(str(exported), str(engine))
+    log.info("Export completato → %s", engine)
+    return YOLO(str(engine), task="detect")
 
 
 # ══════════════════════════════════════════════════════════════
-# Helpers
+# Helper: estrazione e salvataggio ROI
 # ══════════════════════════════════════════════════════════════
 
 
-def _empty_result(
-    video_name: str,
+def _extract_roi(
+    frame: np.ndarray,
+    box: tuple[int, int, int, int],
+    frame_w: int,
+    frame_h: int,
     *,
-    skipped: bool = False,
-    error: str | None = None,
-) -> dict[str, Any]:
-    """Crea un risultato vuoto con struttura coerente per skip/errori."""
-    return {
+    resize: bool = True,
+) -> tuple[np.ndarray, tuple[int, int, int, int]] | None:
+    """Estrae una ROI dal frame: padding → validazione → crop → resize.
+
+    Returns:
+        ``(roi_image, padded_bbox)`` oppure ``None`` se la ROI è troppo
+        piccola o ha aspect ratio anomalo.
+    """
+    px1, py1, px2, py2 = pad_and_clip_box(*box, frame_w, frame_h)
+
+    if not is_valid_roi(px2 - px1, py2 - py1):
+        return None
+
+    roi = frame[py1:py2, px1:px2]
+    if resize:
+        roi = cv2.resize(roi, ROI_RESIZE, interpolation=cv2.INTER_LINEAR)
+    return roi, (px1, py1, px2, py2)
+
+
+def _save_roi_jpeg(roi: np.ndarray, filepath: Path) -> bool:
+    """Scrive la ROI come JPEG con qualità configurata in ``config.py``."""
+    return bool(cv2.imwrite(str(filepath), roi, [cv2.IMWRITE_JPEG_QUALITY, JPEG_QUALITY]))
+
+
+def _compute_quality(sharpness_values: list[float]) -> QualityStats:
+    """Calcola le statistiche di qualità dalle sharpness delle ROI salvate."""
+    if not sharpness_values:
+        return QualityStats()
+    avg = round(sum(sharpness_values) / len(sharpness_values), 1)
+    good = sum(1 for s in sharpness_values if s > SHARPNESS_THRESHOLD)
+    return QualityStats(avg_sharpness=avg, good_rois=good, bad_rois=len(sharpness_values) - good)
+
+
+# ══════════════════════════════════════════════════════════════
+# Metadata I/O
+# ══════════════════════════════════════════════════════════════
+
+
+def _write_video_metadata(
+    path: Path,
+    video_name: str,
+    info: VideoInfo,
+    result: VideoResult,
+    records: list[ROIRecord],
+    status: str,
+) -> None:
+    """Scrive ``metadata.json`` con info video, statistiche e record ROI."""
+    data = {
         "video": video_name,
-        "frames": 0,
-        "rois": 0,
-        "tracks": 0,
-        "elapsed_sec": 0,
-        "processing_fps": 0,
-        "quality": {"avg_sharpness": 0, "good_rois": 0, "bad_rois": 0},
-        "discarded": {
-            "low_conf": 0,
-            "frame_skip": 0,
-            "invalid_roi": 0,
-            "imwrite_failed": 0,
-        },
-        "skipped": skipped,
-        "error": error,
+        "status": status,
+        "resolution": [info.frame_w, info.frame_h],
+        "fps": info.fps,
+        "total_frames": info.total_frames,
+        "processed_frames": result.frames,
+        "total_rois": result.rois,
+        "unique_tracks": result.tracks,
+        "elapsed_sec": result.elapsed_sec,
+        "processing_fps": result.processing_fps,
+        "quality": asdict(result.quality),
+        "discarded": asdict(result.discarded),
+        "records": [asdict(r) for r in records],
     }
+    path.write_text(json.dumps(data, indent=2, ensure_ascii=False), encoding="utf-8")
 
 
 # ══════════════════════════════════════════════════════════════
@@ -345,49 +397,42 @@ def process_single_video(
     model: YOLO,
     output_base_dir: Path,
     args: argparse.Namespace,
-) -> dict[str, Any]:
-    """
-    Pipeline completa per un singolo video: detection → tracking → ROI.
+) -> VideoResult:
+    """Pipeline completa per un singolo video: detection → tracking → ROI.
 
-    Output su disco:
-      <output_base_dir>/<video_name>/Track_XXXX/frame_YYYYYY.jpg
-      <output_base_dir>/<video_name>/metadata.json
+    Fasi:
+      1. **Resume check** — salta se ``metadata.json`` esiste già.
+      2. **Tracking** — ``model.track()``.
+      3. **Estrazione ROI** — per ogni detection: padding, validazione,
+         crop, resize, salvataggio JPEG.
+      4. **Statistiche** — sharpness, contatori, scrittura metadata.
     """
     video_name = Path(video_path).stem
     video_out_dir = output_base_dir / video_name
-
-    # ── Resume: salta video già elaborati ──────────────────────
     meta_path = video_out_dir / "metadata.json"
+
+    # ── 1. Resume: salta video già elaborati ───────────────────
     if meta_path.exists() and not args.force:
-        log.info("Già elaborato (metadata.json presente), skip: %s", video_name)
-        return _empty_result(video_name, skipped=True)
+        log.info("Già elaborato, skip: %s", video_name)
+        return VideoResult(video=video_name, skipped=True)
 
-    video_out_dir.mkdir(parents=True, exist_ok=True)
-
-    # ── Metadati video ─────────────────────────────────────────
     info = get_video_info(video_path)
     if info is None:
-        log.error("Impossibile aprire %s", video_path)
-        return _empty_result(video_name, error="cannot_open")
+        log.error("Impossibile aprire: %s", video_path)
+        return VideoResult(video=video_name, error="cannot_open")
 
-    frame_w: int = int(info["frame_w"])
-    frame_h: int = int(info["frame_h"])
-    fps: float = float(info["fps"])
-    total_frames: int = int(info["total_frames"])
-
+    video_out_dir.mkdir(parents=True, exist_ok=True)
     log.info(
-        "Inizio: %s  (%d×%d @ %.1f fps, ~%d frame)",
+        "Inizio: %s (%d×%d @ %.1f fps, ~%d frame)",
         video_name,
-        frame_w,
-        frame_h,
-        fps,
-        total_frames,
+        info.frame_w,
+        info.frame_h,
+        info.fps,
+        info.total_frames,
     )
 
-    # ── Tracking ───────────────────────────────────────────────
-    use_half = args.tensorrt
-
-    results = model.track(
+    # ── 2. Tracking  ────
+    tracking_results = model.track(
         source=video_path,
         tracker=DEFAULT_TRACKER,
         classes=[PERSON_CLASS_ID],
@@ -396,231 +441,232 @@ def process_single_video(
         stream=True,
         verbose=False,
         imgsz=args.imgsz,
-        half=use_half,
+        half=args.tensorrt,
         show=args.show,
     )
 
-    # ── Contatori e stato ──────────────────────────────────────
+    # ── 3. Loop frame-by-frame ─────────────────────────────────
+    discard = DiscardStats()
+    records: list[ROIRecord] = []
+    sharpness_vals: list[float] = []
+    frame_counter: dict[int, int] = defaultdict(int)  # apparizioni per track
+    created_tracks: set[int] = set()  # track con directory creata
     frame_idx = 0
     saved_rois = 0
-    track_frame_counter: dict[int, int] = defaultdict(int)
-    created_dirs: set[str] = set()
-    metadata_records: list[dict[str, Any]] = []
+    do_resize = not args.no_resize
+    t_start = time.time()
 
-    skipped_low_conf = 0
-    skipped_frame_skip = 0
-    skipped_invalid_roi = 0
-    failed_imwrite = 0
-    sharpness_values: list[float] = []
-
-    t_video_start = time.time()
-
-    # Progress bar: rich se disponibile, altrimenti tqdm
-    if _RICH:
-        progress = Progress(
-            SpinnerColumn(),
-            TextColumn("[bold blue]{task.description}"),
-            BarColumn(bar_width=40),
-            MofNCompleteColumn(),
-            TextColumn("|"),
-            TimeElapsedColumn(),
-            TextColumn("|"),
-            TimeRemainingColumn(),
-            TextColumn("| ROI: {task.fields[roi_count]}"),
-        )
-        progress.start()
-        task_id = progress.add_task(video_name, total=total_frames, roi_count=0)
-    else:
-        progress = None
-        pbar = tqdm(total=total_frames, desc=f"  {video_name}", unit="fr", leave=True)
-
-    # ── Loop frame-by-frame ────────────────────────────────────
+    pbar = tqdm(total=info.total_frames, desc=f"  {video_name}", unit="fr", leave=True)
     interrupted = False
+
     try:
-        for frame_result in results:
+        for frame_result in tracking_results:
             frame = frame_result.orig_img
 
+            # Se nessuna detection ha un track ID assegnato, skip al frame dopo
             if frame_result.boxes.id is not None:
                 boxes = frame_result.boxes.xyxy.cpu().numpy()
-                track_ids = frame_result.boxes.id.int().cpu().numpy()
+                tids = frame_result.boxes.id.int().cpu().numpy()
                 confs = frame_result.boxes.conf.cpu().numpy()
 
-                for box, track_id, conf in zip(boxes, track_ids, confs, strict=True):
-                    x1, y1, x2, y2 = map(int, box)
-                    tid = int(track_id)
+                for box, tid_np, conf in zip(boxes, tids, confs, strict=True):
+                    tid = int(tid_np)
+                    orig_box: tuple[int, int, int, int] = tuple(map(int, box))  # type: ignore[assignment]
 
-                    # Filtro confidenza
-                    if conf < args.conf:
-                        skipped_low_conf += 1
-                        continue
-
-                    # Frame-skip per-track (il primo frame è sempre salvato)
-                    track_frame_counter[tid] += 1
+                    # Frame-skip: il primo frame di ogni track è sempre salvato,
+                    # poi solo ogni N-esimo (riduce il numero di ROI per track)
+                    frame_counter[tid] += 1
                     if (
                         args.frame_skip > 1
-                        and track_frame_counter[tid] > 1
-                        and track_frame_counter[tid] % args.frame_skip != 0
+                        and frame_counter[tid] > 1
+                        and frame_counter[tid] % args.frame_skip != 0
                     ):
-                        skipped_frame_skip += 1
+                        discard.frame_skip += 1
                         continue
 
-                    # Padding + validazione
-                    px1, py1, px2, py2 = pad_and_clip_box(
-                        x1,
-                        y1,
-                        x2,
-                        y2,
-                        frame_w,
-                        frame_h,
+                    # Estrai ROI (padding → validazione → crop → resize)
+                    extraction = _extract_roi(
+                        frame,
+                        orig_box,
+                        info.frame_w,
+                        info.frame_h,
+                        resize=do_resize,
                     )
-                    if not is_valid_roi(px2 - px1, py2 - py1):
-                        skipped_invalid_roi += 1
+                    if extraction is None:
+                        discard.invalid_roi += 1
                         continue
+                    roi, padded_box = extraction
 
-                    # Crop + resize
-                    roi = frame[py1:py2, px1:px2]
-                    if not args.no_resize:
-                        roi = cv2.resize(roi, ROI_RESIZE, interpolation=cv2.INTER_LINEAR)
-
-                    # Salvataggio JPEG
+                    # Directory track (creata lazy, una sola volta per ID)
                     track_dir_name = f"Track_{tid:04d}"
-                    track_dir = video_out_dir / track_dir_name
-                    track_key = str(track_dir)
-                    if track_key not in created_dirs:
-                        track_dir.mkdir(parents=True, exist_ok=True)
-                        created_dirs.add(track_key)
+                    if tid not in created_tracks:
+                        (video_out_dir / track_dir_name).mkdir(parents=True, exist_ok=True)
+                        created_tracks.add(tid)
 
+                    # Salva JPEG
                     filename = f"frame_{frame_idx:06d}.jpg"
-                    filepath = track_dir / filename
-                    if not cv2.imwrite(
-                        str(filepath),
-                        roi,
-                        [int(cv2.IMWRITE_JPEG_QUALITY), int(JPEG_QUALITY)],
-                    ):
+                    filepath = video_out_dir / track_dir_name / filename
+                    if not _save_roi_jpeg(roi, filepath):
                         log.warning("Scrittura fallita: %s", filepath)
-                        failed_imwrite += 1
+                        discard.imwrite_failed += 1
                         continue
 
                     saved_rois += 1
-
-                    # Calcola nitidezza ROI
                     sharp = roi_sharpness(roi)
-                    sharpness_values.append(sharp)
+                    sharpness_vals.append(sharp)
 
-                    metadata_records.append(
-                        {
-                            "track_id": tid,
-                            "frame_idx": frame_idx,
-                            "timestamp": round(frame_idx / fps, 4),
-                            "bbox_original": [x1, y1, x2, y2],
-                            "bbox_padded": [px1, py1, px2, py2],
-                            "confidence": round(float(conf), 4),
-                            "sharpness": round(sharp, 1),
-                            "file": f"{track_dir_name}/{filename}",
-                        }
+                    records.append(
+                        ROIRecord(
+                            track_id=tid,
+                            frame_idx=frame_idx,
+                            timestamp=round(frame_idx / info.fps, 4),
+                            bbox_original=orig_box,
+                            bbox_padded=padded_box,
+                            confidence=round(float(conf), 4),
+                            sharpness=round(sharp, 1),
+                            file=f"{track_dir_name}/{filename}",
+                        )
                     )
 
             frame_idx += 1
-            if progress is not None:
-                progress.update(task_id, advance=1, roi_count=saved_rois)
-            else:
-                pbar.update(1)
-                pbar.set_postfix(roi=saved_rois)
+            pbar.update(1)
+            pbar.set_postfix(roi=saved_rois)
 
     except KeyboardInterrupt:
         interrupted = True
         log.warning(
-            "Ctrl+C su %s — salvataggio dati parziali (%d/%d frame, %d ROI).",
-            video_name,
+            "Ctrl+C — salvataggio parziale (%d/%d frame, %d ROI)",
             frame_idx,
-            total_frames,
+            info.total_frames,
             saved_rois,
         )
     finally:
-        # Chiudi progress bar in ogni caso
-        if progress is not None:
-            progress.stop()
-        else:
-            pbar.close()
+        pbar.close()
 
-    elapsed = time.time() - t_video_start
-    processing_fps = frame_idx / elapsed if elapsed > 0 else 0.0
+    # ── 4. Statistiche e metadata ──────────────────────────────
+    elapsed = time.time() - t_start
+    status = "interrupted" if interrupted else "completed"
+    quality = _compute_quality(sharpness_vals)
 
-    # ── Metadati strutturati ──
-    unique_tracks = len({r["track_id"] for r in metadata_records})
-
-    # Metriche di qualità
-    avg_sharpness = (
-        round(sum(sharpness_values) / len(sharpness_values), 1) if sharpness_values else 0
+    result = VideoResult(
+        video=video_name,
+        frames=frame_idx,
+        rois=saved_rois,
+        tracks=len({r.track_id for r in records}),
+        elapsed_sec=round(elapsed, 2),
+        processing_fps=round(frame_idx / elapsed, 1) if elapsed > 0 else 0.0,
+        quality=quality,
+        discarded=discard,
+        error="interrupted" if interrupted else None,
     )
-    quality_good = sum(1 for s in sharpness_values if s > 100)
-    quality_bad = len(sharpness_values) - quality_good
 
-    status_label = "interrupted" if interrupted else "completed"
-
-    with open(meta_path, "w", encoding="utf-8") as f:
-        json.dump(
-            {
-                "video": video_name,
-                "status": status_label,
-                "resolution": [frame_w, frame_h],
-                "fps": fps,
-                "total_frames": total_frames,
-                "processed_frames": frame_idx,
-                "total_rois": saved_rois,
-                "unique_tracks": unique_tracks,
-                "elapsed_sec": round(elapsed, 2),
-                "processing_fps": round(processing_fps, 1),
-                "quality": {
-                    "avg_sharpness": avg_sharpness,
-                    "good_rois": quality_good,
-                    "bad_rois": quality_bad,
-                },
-                "discarded": {
-                    "low_conf": skipped_low_conf,
-                    "frame_skip": skipped_frame_skip,
-                    "invalid_roi": skipped_invalid_roi,
-                    "imwrite_failed": failed_imwrite,
-                },
-                "records": metadata_records,
-            },
-            f,
-            indent=2,
-            ensure_ascii=False,
-        )
-
+    _write_video_metadata(meta_path, video_name, info, result, records, status)
     log.info(
-        "%s %s in %.1fs → %d ROI, %d track, %.1f fps  (sharp=%.0f)",
+        "%s %s in %.1fs → %d ROI, %d track, %.1f fps (sharp=%.0f)",
         video_name,
-        status_label,
+        status,
         elapsed,
         saved_rois,
-        unique_tracks,
-        processing_fps,
-        avg_sharpness,
+        result.tracks,
+        result.processing_fps,
+        quality.avg_sharpness,
     )
+    return result
 
-    return {
-        "video": video_name,
-        "frames": frame_idx,
-        "rois": saved_rois,
-        "tracks": unique_tracks,
-        "elapsed_sec": round(elapsed, 2),
-        "processing_fps": round(processing_fps, 1),
-        "quality": {
-            "avg_sharpness": avg_sharpness,
-            "good_rois": quality_good,
-            "bad_rois": quality_bad,
-        },
-        "discarded": {
-            "low_conf": skipped_low_conf,
-            "frame_skip": skipped_frame_skip,
-            "invalid_roi": skipped_invalid_roi,
-            "imwrite_failed": failed_imwrite,
-        },
-        "skipped": False,
-        "error": "interrupted" if interrupted else None,
-    }
+
+# ══════════════════════════════════════════════════════════════
+# Report globale
+# ══════════════════════════════════════════════════════════════
+
+
+def _save_report(
+    results: list[VideoResult],
+    output_dir: Path,
+    args: argparse.Namespace,
+    elapsed: float,
+) -> None:
+    """Scrive ``pipeline_report.json`` e stampa riepilogo Rich (se disponibile)."""
+    report_path = output_dir / "pipeline_report.json"
+    report_path.write_text(
+        json.dumps(
+            {
+                "elapsed_sec": round(elapsed, 2),
+                "model": args.model,
+                "backend": "TensorRT FP16" if args.tensorrt else "PyTorch FP32",
+                "engine": (str(get_engine_path(args.model, args.imgsz)) if args.tensorrt else None),
+                "imgsz": args.imgsz,
+                "conf_threshold": args.conf,
+                "frame_skip": args.frame_skip,
+                "resize": None if args.no_resize else list(ROI_RESIZE),
+                "seed": args.seed,
+                "videos": [asdict(r) for r in results],
+            },
+            indent=2,
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
+    log.info("Pipeline terminata in %.1fs — report: %s", elapsed, report_path)
+
+    if _RICH and results:
+        _print_rich_summary(results, elapsed, report_path)
+
+
+def _print_rich_summary(
+    results: list[VideoResult],
+    elapsed: float,
+    report_path: Path,
+) -> None:
+    """Stampa una tabella Rich colorata con il riepilogo dei video."""
+    console = Console()
+    table = Table(title="Riepilogo Pipeline Modulo 1")
+    table.add_column("Video", style="cyan")
+    table.add_column("ROI", justify="right")
+    table.add_column("Track", justify="right")
+    table.add_column("FPS", justify="right")
+    table.add_column("Sharp", justify="right")
+    table.add_column("Qualità", justify="center")
+    table.add_column("Stato", justify="center")
+
+    total_rois = total_tracks = 0
+    for r in results:
+        if r.skipped:
+            table.add_row(r.video, "-", "-", "-", "-", "-", "[yellow]skipped[/yellow]")
+            continue
+
+        total_rois += r.rois
+        total_tracks += r.tracks
+        q = r.quality
+        total_q = q.good_rois + q.bad_rois
+        ratio = f"{q.good_rois}/{total_q}" if total_q else "-"
+        q_style = "green" if q.good_rois >= q.bad_rois else "red"
+
+        if r.error == "interrupted":
+            stato = "[yellow]interrupted[/yellow]"
+        elif r.error:
+            stato = f"[red]{r.error}[/red]"
+        else:
+            stato = "[green]ok[/green]"
+
+        table.add_row(
+            r.video,
+            str(r.rois),
+            str(r.tracks),
+            f"{r.processing_fps:.1f}",
+            f"{q.avg_sharpness:.0f}",
+            f"[{q_style}]{ratio}[/{q_style}]",
+            stato,
+        )
+
+    console.print(table)
+    console.print(
+        Panel(
+            f"[bold]Totale:[/bold] {total_rois} ROI, {total_tracks} track, {elapsed:.1f}s\n"
+            f"[bold]Report:[/bold] {report_path}",
+            title="Completato",
+            border_style="green",
+        ),
+    )
 
 
 # ══════════════════════════════════════════════════════════════
@@ -632,9 +678,14 @@ def main() -> None:
     """Orchestratore: logging → seed → validazione → modello → loop video → report."""
     log_file = setup_logging()
     args = parse_args()
-    validate_args(args)
-    set_seed(args.seed)
 
+    try:
+        validate_args(args)
+    except ConfigError as exc:
+        log.error(str(exc))
+        sys.exit(1)
+
+    set_seed(args.seed)
     if log_file:
         log.info("Log file: %s", log_file)
 
@@ -647,134 +698,35 @@ def main() -> None:
         f.name for f in input_dir.iterdir() if f.suffix.lower() in VIDEO_EXTENSIONS
     )
     if not video_files:
-        log.error(
-            "Nessun video trovato in %s  (formati: %s)",
-            args.input_dir,
-            ", ".join(VIDEO_EXTENSIONS),
-        )
+        log.error("Nessun video in %s (formati: %s)", input_dir, ", ".join(VIDEO_EXTENSIONS))
         sys.exit(1)
 
-    # Caricamento modello
-    model = load_model(args)
+    if args.max_videos > 0:
+        video_files = video_files[: args.max_videos]
 
-    n_videos = len(video_files)
-    log.info("Trovati %d video da elaborare.", n_videos)
+    # Caricamento modello
+    model = load_model(args.model, args.imgsz, use_tensorrt=args.tensorrt)
+
+    n = len(video_files)
+    log.info("Trovati %d video da elaborare.", n)
     t_start = time.time()
-    report: list[dict[str, Any]] = []
+    results: list[VideoResult] = []
 
     try:
-        for vid_idx, video_file in enumerate(video_files, start=1):
-            log.info("═══ Video %d/%d ═══", vid_idx, n_videos)
-            video_path = str(input_dir / video_file)
+        for i, vf in enumerate(video_files, 1):
+            log.info("═══ Video %d/%d ═══", i, n)
             try:
-                stats = process_single_video(video_path, model, output_dir, args)
+                r = process_single_video(str(input_dir / vf), model, output_dir, args)
             except Exception:
-                log.exception("Errore fatale su %s — skip", video_file)
-                stats = _empty_result(Path(video_file).stem, error="exception")
-            report.append(stats)
-            if stats.get("error") == "interrupted":
+                log.exception("Errore fatale su %s — skip", vf)
+                r = VideoResult(video=Path(vf).stem, error="exception")
+            results.append(r)
+            if r.error == "interrupted":
                 break
     except KeyboardInterrupt:
         log.warning("Interruzione manuale — salvataggio report parziale.")
 
-    elapsed = time.time() - t_start
-
-    # ── Report globale ────────────────────────────────────────
-    _save_report(report, output_dir, args, elapsed)
-
-
-def _save_report(
-    report: list[dict[str, Any]],
-    output_dir: Path,
-    args: argparse.Namespace,
-    elapsed: float,
-) -> None:
-    """Scrive pipeline_report.json e stampa il riepilogo rich."""
-    engine_path = get_engine_path(args.model, args.imgsz)
-    report_path = output_dir / "pipeline_report.json"
-    with open(report_path, "w", encoding="utf-8") as f:
-        json.dump(
-            {
-                "elapsed_sec": round(elapsed, 2),
-                "model": args.model,
-                "backend": "TensorRT FP16" if args.tensorrt else "PyTorch FP32",
-                "engine": str(engine_path) if args.tensorrt else None,
-                "imgsz": args.imgsz,
-                "conf_threshold": args.conf,
-                "frame_skip": args.frame_skip,
-                "resize": None if args.no_resize else list(ROI_RESIZE),
-                "seed": args.seed,
-                "videos": report,
-            },
-            f,
-            indent=2,
-            ensure_ascii=False,
-        )
-
-    log.info("Pipeline Modulo 1 terminata in %.1fs — report: %s", elapsed, report_path)
-
-    # ── Riepilogo con rich (se disponibile) ────────────────────
-    if not (_RICH and report):
-        return
-
-    console = Console()
-    table = Table(title="Riepilogo Pipeline Modulo 1")
-    table.add_column("Video", style="cyan")
-    table.add_column("ROI", justify="right")
-    table.add_column("Track", justify="right")
-    table.add_column("FPS", justify="right")
-    table.add_column("Sharp", justify="right")
-    table.add_column("Qualità", justify="center")
-    table.add_column("Stato", justify="center")
-
-    total_rois = 0
-    total_tracks = 0
-    for r in report:
-        if r.get("skipped"):
-            table.add_row(str(r["video"]), "-", "-", "-", "-", "-", "[yellow]skipped[/yellow]")
-            continue
-
-        rois: int = r.get("rois", 0)
-        trks: int = r.get("tracks", 0)
-        fps_val: float = r.get("processing_fps", 0)
-        q: dict[str, Any] = r.get("quality", {})
-        sharp: float = q.get("avg_sharpness", 0)
-        good: int = q.get("good_rois", 0)
-        bad: int = q.get("bad_rois", 0)
-        ratio = f"{good}/{good + bad}" if (good + bad) > 0 else "-"
-        q_style = "green" if good >= bad else "red"
-        error = r.get("error")
-
-        total_rois += rois
-        total_tracks += trks
-
-        if error == "interrupted":
-            stato = "[yellow]interrupted[/yellow]"
-        elif error:
-            stato = f"[red]{error}[/red]"
-        else:
-            stato = "[green]ok[/green]"
-
-        table.add_row(
-            str(r["video"]),
-            str(rois),
-            str(trks),
-            f"{fps_val:.1f}",
-            f"{sharp:.0f}",
-            f"[{q_style}]{ratio}[/{q_style}]",
-            stato,
-        )
-
-    console.print(table)
-    console.print(
-        Panel(
-            f"[bold]Totale:[/bold] {total_rois} ROI, {total_tracks} track, "
-            f"{elapsed:.1f}s\n"
-            f"[bold]Report:[/bold] {report_path}",
-            title="Completato",
-            border_style="green",
-        )
-    )
+    _save_report(results, output_dir, args, time.time() - t_start)
 
 
 if __name__ == "__main__":

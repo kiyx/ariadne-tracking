@@ -7,6 +7,7 @@ Tutte le funzioni sono testabili in isolamento.
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -19,6 +20,18 @@ from config import (
     MIN_WIDTH,
     PADDING_RATIO,
 )
+
+# ── Dataclass condivise ───────────────────────────────────────
+
+
+@dataclass
+class VideoInfo:
+    """Metadati base di un file video (risoluzione, fps, durata)."""
+
+    frame_w: int
+    frame_h: int
+    fps: float
+    total_frames: int
 
 
 def pad_and_clip_box(
@@ -92,15 +105,11 @@ def roi_sharpness(roi: np.ndarray) -> float:
     return float(cv2.Laplacian(gray, cv2.CV_64F).var())
 
 
-def get_video_info(video_path: str) -> dict[str, int | float] | None:
-    """
-    Estrae metadati del video (risoluzione, fps, frame count).
+def get_video_info(video_path: str) -> VideoInfo | None:
+    """Estrae metadati del video (risoluzione, fps, frame count).
 
     Apre e rilascia subito l'handle per evitare conflitti con
-    model.track() su Windows (due handle sullo stesso file = lock).
-
-    Import cv2 qui dentro anziché a livello di modulo per mantenere
-    utils.py testabile senza richiedere una GUI/display.
+    ``model.track()`` su Windows (due handle sullo stesso file = lock).
     """
     import cv2
 
@@ -108,11 +117,11 @@ def get_video_info(video_path: str) -> dict[str, int | float] | None:
     if not cap.isOpened():
         return None
 
-    info: dict[str, int | float] = {
-        "frame_w": int(cap.get(cv2.CAP_PROP_FRAME_WIDTH)),
-        "frame_h": int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT)),
-        "fps": float(cap.get(cv2.CAP_PROP_FPS) or 30.0),
-        "total_frames": int(cap.get(cv2.CAP_PROP_FRAME_COUNT)),
-    }
+    info = VideoInfo(
+        frame_w=int(cap.get(cv2.CAP_PROP_FRAME_WIDTH)),
+        frame_h=int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT)),
+        fps=float(cap.get(cv2.CAP_PROP_FPS) or 30.0),
+        total_frames=int(cap.get(cv2.CAP_PROP_FRAME_COUNT)),
+    )
     cap.release()
     return info

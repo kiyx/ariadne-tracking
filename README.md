@@ -56,7 +56,7 @@ cd ariadne-tracking
 python src/01_tracker_extractor.py
 ```
 
-Usa i percorsi di default definiti in `configs/default.yaml`.
+Usa i percorsi di default definiti in `src/config.py`.
 
 ### Con TensorRT (consigliato per produzione)
 
