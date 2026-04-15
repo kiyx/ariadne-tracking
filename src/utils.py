@@ -19,7 +19,7 @@ from typing import cast
 
 import numpy as np
 import torch
-from torchvision import transforms  # type: ignore[import-untyped,import-not-found]
+from torchvision import transforms
 
 from src.config import (
     CONTAINMENT_THRESHOLD,

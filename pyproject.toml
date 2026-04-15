@@ -50,6 +50,7 @@ addopts = "-v --tb=short"
 target-version = "py310"
 line-length = 100
 src = ["src", "tests"]
+extend-exclude = ["models/"]
 
 [tool.ruff.lint]
 select = [
@@ -106,19 +107,19 @@ module = [
     "cv2.*",
     "tqdm.*",
     "rich.*",
-    "yacs.*",
     "numpy.*",
     "torch.*",
     "torchvision.*",
     "PIL.*",
+    "models.*",
+    "dash.*",
+    "dash_bootstrap_components.*",
+    "dash_cytoscape.*",
+    "plotly.*",
+    "scipy.*",
 ]
 ignore_missing_imports = true
 follow_imports = "skip"
-
-[[tool.mypy.overrides]]
-module = ["models.*"]
-follow_imports = "skip"
-ignore_errors = true
 
 # ── Build system ──────────────────────────────────────────────
 
