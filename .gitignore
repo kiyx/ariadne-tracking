@@ -43,13 +43,18 @@ ariadne_env/
 # ── OS ───────────────────────────────────────────────────
 .DS_Store
 Thumbs.db
+desktop.ini
 *.tmp
+*~
+*.bak
+*.swp
 
 # ── Jupyter / IPython ────────────────────────────────────
 .ipynb_checkpoints/
+*.ipynb
 profile_default/
 
-# ── 1. Modelli AI & Pesi ─────────────────────────────────
+# ── Modelli AI & Pesi ────────────────────────────────────
 # File pesanti, versionati con DVC o scaricati separatamente.
 *.pt
 *.pth
@@ -63,32 +68,54 @@ weights/
 checkpoints/
 models/
 
-# ── 2. Dataset e Media ───────────────────────────────────
-# Video raw (scaricati con 00_setup_dataset.py)
-data/raw/videos/*.avi
-data/raw/videos/*.mp4
-data/raw/videos/*.mov
-data/raw/videos/*.mkv
-data/raw/videos/*.webm
+# Eccezione: codice sorgente Simple-CCReID necessario a runtime
+# (config modello, backbone C2DResNet50, utilities, symlink top-level).
+# Git richiede di un-ignorare ogni livello di directory padre.
+!models/
+models/*
+!models/simple_ccreid/
+models/simple_ccreid/*
+!models/simple_ccreid/configs/
+models/simple_ccreid/configs/*
+!models/simple_ccreid/configs/default_vid.py
+!models/simple_ccreid/models/
+models/simple_ccreid/models/*
+!models/simple_ccreid/models/__init__.py
+!models/simple_ccreid/models/vid_resnet.py
+!models/simple_ccreid/models/classifier.py
+!models/simple_ccreid/models/img_resnet.py
+!models/simple_ccreid/models/utils/
+models/simple_ccreid/models/utils/*
+!models/simple_ccreid/models/utils/*.py
+# Symlink top-level (puntano a simple_ccreid/models/*)
+!models/vid_resnet.py
+!models/classifier.py
+!models/img_resnet.py
+!models/utils
 
-# ROI estratte (generate dal Modulo 1)
-data/processed/extracted_rois/*/
-data/processed/extracted_rois/*.json
+# ── Dataset ──────────────────────────────────────────────
+# Video raw (mantieni solo i file con gli URL)
+data/raw/videos/*
+!data/raw/videos/mevid-v1-video-URLS.txt
+!data/raw/videos/mevid-subset-urls.txt
+
+# ROI estratte, embedding e report intermedi
+data/processed/
+
+# Annotazioni e crop GT MEVID (scaricati separatamente)
+data/mevid-v1-annotation-data/
+data/mevid-v1-bbox-test/
 
 # Altre directory dati
 datasets/
 test_videos/
 gallery/
 
-# ── 3. Log & Output ─────────────────────────────────────
+# ── Log & Output ─────────────────────────────────────────
 output/logs/
+output/*.json
+*.log
 runs/
 wandb/
 logs/
 cache/
-*.log
-
-# ── 4. File da mantenere ────────────────────
-# URL dei video
-!data/raw/videos/mevid-v1-video-URLS.txt
-!data/raw/videos/mevid-subset-urls.txt

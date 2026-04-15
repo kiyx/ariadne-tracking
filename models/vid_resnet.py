@@ -1,0 +1,1 @@
+./simple_ccreid/models/vid_resnet.py

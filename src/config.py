@@ -17,10 +17,11 @@ PROJECT_ROOT = _SRC_DIR.parent
 # ── Costanti di detection / tracking ──────────────────────────
 
 PERSON_CLASS_ID = 0
-MIN_WIDTH = 32
-MIN_HEIGHT = 64
-MAX_ASPECT_RATIO = 1.5
-DEFAULT_CONF = 0.50
+MIN_WIDTH = 48
+MIN_HEIGHT = 128
+MAX_ASPECT_RATIO = 0.9
+MIN_ASPECT_RATIO = 0.2
+DEFAULT_CONF = 0.65
 DEFAULT_FRAME_SKIP = 3
 DEFAULT_IMGSZ = 640
 DEFAULT_TRACKER = "botsort.yaml"
@@ -44,7 +45,18 @@ LOG_DIR = PROJECT_ROOT / "output" / "logs"
 
 # ── Soglia qualità ROI ─────────────────────────────────────────
 
-SHARPNESS_THRESHOLD = 100
+SHARPNESS_THRESHOLD = 15
+
+# ── Filtro track ────────────────────────────────────────────────
+
+MIN_TRACK_FRAMES = 8  # Track con meno di N frame vengono scartate
+MIN_INTRA_TRACK_SIMILARITY = 0.6  # Similarità coseno minima intra-track (sotto → ID switch)
+CONTAINMENT_THRESHOLD = 0.7  # Sopprime bbox contenute per >=70% in una bbox più grande
+
+# ── ReID / Feature extraction ─────────────────────────────────
+
+SEQ_LEN = 8  # Lunghezza sequenza temporale per C2DResNet50
+DEFAULT_REID_WEIGHTS = PROJECT_ROOT / "models" / "CAL_best_model.pth.tar"
 
 # ── Seed di default ───────────────────────────────────────────
 

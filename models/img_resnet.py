@@ -1,0 +1,1 @@
+./simple_ccreid/models/img_resnet.py

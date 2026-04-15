@@ -8,14 +8,14 @@
     "reportAttributeAccessIssue": false,
     "reportOptionalMemberAccess": false,
     "extraPaths": [
-        "src"
+        "."
     ],
     "ignore": [
         "**/node_modules"
     ],
     "executionEnvironments": [
         {
-            "root": "src"
+            "root": "."
         }
     ]
 }

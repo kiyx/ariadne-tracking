@@ -9,7 +9,7 @@ Input:
 
 Output:
     Per ogni video → ``Track_XXXX/frame_YYYYYY.jpg`` + ``metadata.json``.
-    In più, un ``pipeline_report.json`` globale con statistiche aggregate.
+    In più, un ``pipeline_report_modulo1.json`` globale con statistiche aggregate.
 
 Le ROI estratte alimentano il Modulo 2 (Simple-CCReID)
 per il calcolo degli embedding di re-identificazione.
@@ -26,7 +26,6 @@ import sys
 import time
 from collections import defaultdict
 from dataclasses import asdict, dataclass, field
-from datetime import datetime
 from pathlib import Path
 
 import cv2
@@ -35,7 +34,7 @@ import torch
 from tqdm import tqdm
 from ultralytics import YOLO
 
-from config import (
+from src.config import (
     DEFAULT_CONF,
     DEFAULT_FRAME_SKIP,
     DEFAULT_IMGSZ,
@@ -45,26 +44,26 @@ from config import (
     DEFAULT_SEED,
     DEFAULT_TRACKER,
     JPEG_QUALITY,
-    LOG_DIR,
     PERSON_CLASS_ID,
     ROI_RESIZE,
     SHARPNESS_THRESHOLD,
     VIDEO_EXTENSIONS,
 )
-from utils import (
+from src.utils import (
     VideoInfo,
     get_engine_path,
     get_video_info,
     is_valid_roi,
     pad_and_clip_box,
     roi_sharpness,
+    setup_logging,
+    suppress_contained_boxes,
 )
 
 # ── Rich (opzionale, per logging colorato e tabella riepilogo) ─
 
 try:
     from rich.console import Console
-    from rich.logging import RichHandler
     from rich.panel import Panel
     from rich.table import Table
 
@@ -95,12 +94,15 @@ class DiscardStats:
 
     - ``frame_skip``     — scartate dalla regola 1-ogni-N.
     - ``invalid_roi``    — troppo piccole o con aspect ratio anomalo.
+    - ``low_sharpness``  — ROI troppo sfocate (sotto soglia nitidezza).
     - ``imwrite_failed`` — errore di scrittura su disco.
     """
 
     frame_skip: int = 0
     invalid_roi: int = 0
+    low_sharpness: int = 0
     imwrite_failed: int = 0
+    contained: int = 0
 
 
 @dataclass
@@ -139,57 +141,7 @@ class ROIRecord:
 
 
 class ConfigError(ValueError):
-    """Parametri CLI non validi — catturata in ``main()`` per uscire con codice 1.
-
-    Lanciare un'eccezione invece di chiamare ``sys.exit()`` direttamente
-    rende ``validate_args`` testabile: nei test si può fare
-    ``with pytest.raises(ConfigError)`` senza che il processo termini.
-    """
-
-
-# ══════════════════════════════════════════════════════════════
-# Logging (console + file)
-# ══════════════════════════════════════════════════════════════
-
-
-def setup_logging() -> Path | None:
-    """Configura logging su console (Rich o plain) e su file.
-
-    Il file viene creato in ``output/logs/run_<timestamp>.log``.
-    Il guard ``if root.handlers`` evita handler duplicati se la funzione
-    viene chiamata più volte (ad es. nei test).
-    """
-    root = logging.getLogger()
-    if root.handlers:
-        return None
-    root.setLevel(logging.INFO)
-
-    fmt = logging.Formatter("%(asctime)s [%(levelname)s] %(message)s", datefmt="%H:%M:%S")
-
-    # Console handler: Rich (colori) se disponibile, altrimenti plain
-    if _RICH:
-        ch: logging.Handler = RichHandler(
-            show_time=True,
-            show_path=False,
-            markup=True,
-            rich_tracebacks=True,
-        )
-        ch.setFormatter(logging.Formatter("%(message)s"))
-    else:
-        ch = logging.StreamHandler(sys.stdout)
-        ch.setFormatter(fmt)
-    root.addHandler(ch)
-
-    # File handler
-    try:
-        LOG_DIR.mkdir(parents=True, exist_ok=True)
-        log_file = LOG_DIR / f"run_{datetime.now().strftime('%Y%m%d_%H%M%S')}.log"
-        fh = logging.FileHandler(log_file, encoding="utf-8")
-        fh.setFormatter(fmt)
-        root.addHandler(fh)
-        return log_file
-    except OSError:
-        return None
+    """Eccezione per parametri CLI non validi"""
 
 
 # ══════════════════════════════════════════════════════════════
@@ -224,7 +176,7 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--model", default=str(DEFAULT_MODEL_PATH), help="Path modello YOLO (.pt)")
 
     # ── Parametri pipeline ────────────────────────────────────
-    p.add_argument("--conf", type=float, default=DEFAULT_CONF, help="Soglia confidenza (0–1)")
+    p.add_argument("--conf", type=float, default=DEFAULT_CONF, help="Soglia confidence (0–1)")
     p.add_argument(
         "--frame-skip",
         type=int,
@@ -337,7 +289,7 @@ def _extract_roi(
 
     roi = frame[py1:py2, px1:px2]
     if resize:
-        roi = cv2.resize(roi, ROI_RESIZE, interpolation=cv2.INTER_LINEAR)
+        roi = cv2.resize(roi, ROI_RESIZE, interpolation=cv2.INTER_CUBIC)
     return roi, (px1, py1, px2, py2)
 
 
@@ -347,11 +299,17 @@ def _save_roi_jpeg(roi: np.ndarray, filepath: Path) -> bool:
 
 
 def _compute_quality(sharpness_values: list[float]) -> QualityStats:
-    """Calcola le statistiche di qualità dalle sharpness delle ROI salvate."""
+    """Calcola le statistiche di qualità dalle sharpness delle ROI salvate.
+
+    Dopo il filtraggio hard (ROI sotto SHARPNESS_THRESHOLD scartate),
+    le ROI rimaste vengono classificate in 'good' (> 2× soglia) o 'mediocre'.
+    """
     if not sharpness_values:
         return QualityStats()
     avg = round(sum(sharpness_values) / len(sharpness_values), 1)
-    good = sum(1 for s in sharpness_values if s > SHARPNESS_THRESHOLD)
+    # Soglia qualitativa "buona ROI" = 2x la soglia minima di filtro
+    good_threshold = SHARPNESS_THRESHOLD * 2
+    good = sum(1 for s in sharpness_values if s > good_threshold)
     return QualityStats(avg_sharpness=avg, good_rois=good, bad_rois=len(sharpness_values) - good)
 
 
@@ -469,6 +427,16 @@ def process_single_video(
                 tids = frame_result.boxes.id.int().cpu().numpy()
                 confs = frame_result.boxes.conf.cpu().numpy()
 
+                # Sopprime bbox più piccole contenute in bbox più grandi
+                # (es. piedi rilevati dentro una detection a corpo intero)
+                keep_mask = suppress_contained_boxes(boxes)
+                n_suppressed = int((~keep_mask).sum())
+                if n_suppressed > 0:
+                    discard.contained += n_suppressed
+                    boxes = boxes[keep_mask]
+                    tids = tids[keep_mask]
+                    confs = confs[keep_mask]
+
                 for box, tid_np, conf in zip(boxes, tids, confs, strict=True):
                     tid = int(tid_np)
                     orig_box: tuple[int, int, int, int] = tuple(map(int, box))  # type: ignore[assignment]
@@ -497,6 +465,12 @@ def process_single_video(
                         continue
                     roi, padded_box = extraction
 
+                    # Filtra ROI troppo sfocate prima del salvataggio
+                    sharp = roi_sharpness(roi)
+                    if sharp < SHARPNESS_THRESHOLD:
+                        discard.low_sharpness += 1
+                        continue
+
                     # Directory track (creata lazy, una sola volta per ID)
                     track_dir_name = f"Track_{tid:04d}"
                     if tid not in created_tracks:
@@ -512,7 +486,6 @@ def process_single_video(
                         continue
 
                     saved_rois += 1
-                    sharp = roi_sharpness(roi)
                     sharpness_vals.append(sharp)
 
                     records.append(
@@ -586,7 +559,7 @@ def _save_report(
     elapsed: float,
 ) -> None:
     """Scrive ``pipeline_report.json`` e stampa riepilogo Rich (se disponibile)."""
-    report_path = output_dir / "pipeline_report.json"
+    report_path = output_dir / "pipeline_report_modulo1.json"
     report_path.write_text(
         json.dumps(
             {
@@ -676,7 +649,7 @@ def _print_rich_summary(
 
 def main() -> None:
     """Orchestratore: logging → seed → validazione → modello → loop video → report."""
-    log_file = setup_logging()
+    log_file = setup_logging("run_mod1")
     args = parse_args()
 
     try:

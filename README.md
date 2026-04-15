@@ -1,28 +1,53 @@
-# Ariadne Tracking System
+# Ariadne Tracking
 
-## Distributed Multi-Camera Tracking & Re-Identification Framework
+## Multi-Camera Person Tracking & Re-Identification
 
 > **Tesi di Laurea Triennale in Informatica**
 > **Università degli Studi di Napoli Federico II**
 
-| | |
-| :--- | :--- |
-| **Candidato** | Giuseppe Paolo Esposito |
-| **Matricola** | N86005174 |
-| **Relatore** | Prof. Daniel Riccio |
-| **Anno Accademico** | 2025/2026 |
+|                     |                         |
+| :------------------ | :---------------------- |
+| **Candidato**       | Giuseppe Paolo Esposito |
+| **Matricola**       | N86005174               |
+| **Relatore**        | Prof. Daniel Riccio     |
+| **Anno Accademico** | 2025/2026               |
 
 ---
 
-## Descrizione del Progetto
+## Panoramica
 
-## Architettura
+Pipeline modulare per il tracking multi-camera e la re-identificazione di
+persone su video di sorveglianza. Il sistema elabora video grezzi dal dataset
+**MEVID**, estrae tracklet per persona, calcola embedding Re-ID con un modello
+*Clothes-Agnostic* (CAL) e costruisce un grafo di corrispondenza cross-camera.
+
+```text
+                    Modulo 0                    Modulo 1
+               ┌──────────────┐    ┌───────────────────────────┐
+ Video MEVID ──┤  S3 Download ├───►│ YOLO26m + BoT-SORT        │
+               └──────────────┘    │ Detection → Tracking → ROI│
+                                   └─────────────┬─────────────┘
+                                                  │
+                    Modulo 2                      ▼
+               ┌──────────────────────────────────────┐
+               │ C2DResNet50 + CAL → Embedding 2048-D │
+               └──────────────┬───────────────────────┘
+                              │
+                    Modulo 3  ▼
+               ┌──────────────────────────────────────┐
+               │           Grafo JSON                 │
+               └──────────────────────────────────────┘
+
+```
 
 ## Requisiti
 
-- **Python** ≥ 3.10
-- **NVIDIA GPU** con CUDA ≥ 12.x (testato su RTX 3060 6GB)
-- **Conda** Miniconda
+| Requisito        | Versione minima                        |
+| :--------------- | :------------------------------------- |
+| **Python**       | ≥ 3.10                                 |
+| **NVIDIA GPU**   | CUDA ≥ 12.x (testato su RTX 3060 6 GB) |
+| **Conda**        | Miniconda / Anaconda                   |
+| **Spazio disco** | ~200MB (subset 3 video)                |
 
 ## Installazione
 
@@ -31,45 +56,162 @@
 git clone https://github.com/kiyx/ariadne-tracking.git
 cd ariadne-tracking
 
-# 2. Crea l'ambiente conda
+# 2. Ambiente conda
 conda create -n ariadne_env python=3.10 -y
 conda activate ariadne_env
 
-# 3. Installa PyTorch con supporto CUDA
+# 3. PyTorch con CUDA
 pip install torch torchvision --index-url https://download.pytorch.org/whl/cu126
 
-# 4. Installa le dipendenze del progetto
+# 4. Dipendenze progetto
 pip install -r requirements.txt
 
-# 5. (Opzionale) Installa le dipendenze di sviluppo (pytest)
+# 5. (Opzionale) Dashboard interattiva
+pip install -e ".[viz]"
+
+# 6. (Opzionale) Tool di sviluppo (pytest, ruff, mypy)
 pip install -e ".[dev]"
 ```
 
-## Struttura del Progetto
-
-## Uso
-
-### Esecuzione base
+## Quick Start
 
 ```bash
-cd ariadne-tracking
-python src/01_tracker_extractor.py
+conda activate ariadne_env
+
+# Download subset MEVID (3 video, ~400 MB)
+python -m src.00_setup_dataset --subset
+
+# Pipeline completa
+python -m src.01_tracker_extractor          # Detection + tracking → ROI
+python -m src.02_feature_extractor          # Embedding Re-ID 2048-D
+python -m src.03_build_graph                # Grafo cross-camera
+python -m src.04_visualize_graph            # Dashboard → http://localhost:8050
 ```
 
-Usa i percorsi di default definiti in `src/config.py`.
-
-### Con TensorRT (consigliato per produzione)
+Per usare **TensorRT FP16** (accelera la detection ~2×):
 
 ```bash
-# Prima esecuzione: esporta il modello (~2-5 min, poi riusa il .engine)
-python src/01_tracker_extractor.py --tensorrt
+python -m src.01_tracker_extractor --tensorrt
 ```
 
-### Opzioni CLI
+## Struttura
+
+```text
+ariadne-tracking/
+├── src/
+│   ├── config.py                  # Costanti e parametri centralizzati
+│   ├── utils.py                   # Funzioni helper (bbox, logging, ROI)
+│   ├── 00_setup_dataset.py        # Download video MEVID da S3
+│   ├── 01_tracker_extractor.py    # YOLO26 + BoT-SORT → ROI extraction
+│   ├── 02_feature_extractor.py    # C2DResNet50 + CAL → embedding 2048-D
+│   ├── 03_build_graph.py          # Grafo di movimento cross/intra-camera
+│   ├── 04_visualize_graph.py      # Dashboard interattiva (Dash)
+│   └── eval_mevid.py              # Benchmark MEVID ufficiale (CMC + mAP)
+├── models/
+│   ├── yolo26m.pt                 # Pesi YOLO26m (detection)
+│   ├── CAL_best_model.pth.tar     # Pesi CAL (Re-ID)
+│   └── simple_ccreid/             # Sorgente Simple-CCReID (CAL backbone)
+├── data/
+│   ├── raw/videos/                # Video MEVID grezzi
+│   ├── processed/extracted_rois/  # ROI estratte per tracklet
+│   ├── mevid-v1-bbox-test/        # Crop GT per benchmark ufficiale
+│   └── mevid-v1-annotation-data/  # Annotazioni MEVID
+├── output/                        # Report JSON e log
+├── pyproject.toml                 # Configurazione progetto e tool
+└── requirements.txt               # Dipendenze pip
+```
+
+## Opzioni CLI
+
+### `01_tracker_extractor` — Detection & Tracking
+
+| Flag           | Default      | Descrizione                       |
+| :------------- | :----------- | :-------------------------------- |
+| `--model`      | `yolo26m.pt` | Modello YOLO                      |
+| `--conf`       | `0.65`       | Soglia confidenza detection       |
+| `--frame-skip` | `3`          | Salva 1 ROI ogni N frame          |
+| `--imgsz`      | `640`        | Risoluzione input YOLO            |
+| `--tensorrt`   | off          | Accelerazione TensorRT FP16       |
+| `--no-resize`  | off          | Mantieni dimensione originale ROI |
+| `--force`      | off          | Riprocessa video già completati   |
+| `--show`       | off          | Preview detection in tempo reale  |
+| `--max-videos` | `0` (tutti)  | Limita elaborazione a N video     |
+
+### `02_feature_extractor` — Embedding Re-ID
+
+| Flag           | Default                  | Descrizione                    |
+| :------------- | :----------------------- | :----------------------------- |
+| `--weights`    | `CAL_best_model.pth.tar` | Pesi modello CAL               |
+| `--batch-size` | `8`                      | Batch size DataLoader          |
+| `--workers`    | `2`                      | Worker DataLoader              |
+| `--force`      | off                      | Rielabora video già completati |
+
+### `03_build_graph` — Costruzione Grafo
+
+| Flag             | Default | Descrizione                                   |
+| :--------------- | :------ | :-------------------------------------------- |
+| `--threshold`    | `0.55`  | Soglia similarità minima per clustering       |
+| `--max-time-gap` | `300`   | Intervallo temporale massimo tra tracklet (s) |
+
+### `04_visualize_graph` — Dashboard
+
+| Flag      | Default | Descrizione             |
+| :-------- | :------ | :---------------------- |
+| `--graph` | auto    | Path specifico al grafo |
+| `--port`  | `8050`  | Porta del server Dash   |
+
+### `eval_mevid` — Benchmark Ufficiale
+
+| Flag                   | Default | Descrizione                  |
+| :--------------------- | :------ | :--------------------------- |
+| `--clips-per-tracklet` | `4`     | Clip campionate per tracklet |
+| `--batch-size`         | `16`    | Batch size DataLoader        |
+
+## Parametri della Pipeline
+
+Costanti configurabili in [`src/config.py`](src/config.py):
+
+| Parametro                    | Valore  | Utilizzo                                     |
+| :--------------------------- | :------ | :------------------------------------------- |
+| `MIN_WIDTH` × `MIN_HEIGHT`   | 48×128  | Dimensione minima bbox accettata             |
+| `ROI_RESIZE`                 | 128×256 | Dimensione output ROI (w × h)                |
+| `PADDING_RATIO`              | 0.05    | Padding percentuale attorno alla bbox        |
+| `SHARPNESS_THRESHOLD`        | 15      | Soglia Laplaciana per scartare ROI sfocate   |
+| `CONTAINMENT_THRESHOLD`      | 0.70    | Soglia soppressione bbox contenute           |
+| `MIN_TRACK_FRAMES`           | 8       | Frame minimi per considerare un track valido |
+| `MIN_INTRA_TRACK_SIMILARITY` | 0.60    | Similarità coseno minima intra-track         |
+| `SEQ_LEN`                    | 8       | Lunghezza sequenza temporale per C2DResNet   |
+| `JPEG_QUALITY`               | 95      | Qualità di compressione JPEG                 |
+| `DEFAULT_SEED`               | 67      | Seed per riproducibilità                     |
 
 ## Tecnologie
 
+| Componente        | Tecnologia                                    |
+| :---------------- | :-------------------------------------------- |
+| Detection         | YOLO26m (Ultralytics)                         |
+| Tracking          | BoT-SORT                                      |
+| Re-Identification | C2DResNet50 + CAL (Clothes-Agnostic Learning) |
+| Clustering        | Agglomerativo (scipy)                         |
+| Framework DL      | PyTorch + TorchVision                         |
+| Accelerazione     | CUDA, TensorRT FP16                           |
+| Dashboard         | Dash + Cytoscape + Plotly                     |
+
 ## Dataset
+
+**MEVID** (Multi-view Extended Videos with Identities) — WACV 2023
+
+- 158 identità, 598 outfit, 8 092 tracklet, 33 telecamere
+- Test split: 54 identità, 1 754 tracklet, 316 query
+
+### Risultati Benchmark MEVID (protocollo standard)
+
+| Metrica | Valore |
+| :------ | -----: |
+| Rank-1  |  50.0% |
+| Rank-5  |  68.7% |
+| Rank-10 |  73.1% |
+| Rank-20 |  79.8% |
+| mAP     |  26.3% |
 
 ## Licenza
 

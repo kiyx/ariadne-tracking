@@ -1,6 +1,6 @@
 [project]
 name = "ariadne-tracking"
-version = "1.0.0"
+version = "0.1.0"
 description = "Distributed Multi-Camera Tracking & Re-Identification Framework"
 readme = "README.md"
 requires-python = ">=3.10"
@@ -21,6 +21,13 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
+viz = [
+    "dash>=2.17.0",
+    "dash-bootstrap-components>=1.6.0",
+    "dash-cytoscape>=1.0.0",
+    "Pillow>=10.0.0",
+    "plotly>=5.20.0",
+]
 dev = [
     "pytest>=7.0",
     "pytest-cov>=4.0",
@@ -68,6 +75,7 @@ ignore = [
     "E501",   # line too long (gestito dal formatter)
     "RET504", # unnecessary assignment before return
     "N999",   # i nomi 00_, 01_ sono intenzionali per ordinamento
+    "C408",   # dict() usato intenzionalmente per Plotly/Dash (più leggibile di {})
     "RUF001", # caratteri Unicode intenzionali (×, –, →) nelle stringhe italiane
     "RUF002", # idem per docstring
     "ERA001", # i commenti separatori di sezione (═══) non sono codice commentato
@@ -83,7 +91,6 @@ known-first-party = ["config", "utils"]
 
 [tool.mypy]
 python_version = "3.10"
-mypy_path = ["src"]
 explicit_package_bases = true
 warn_return_any = true
 warn_unused_configs = true
@@ -102,9 +109,16 @@ module = [
     "yacs.*",
     "numpy.*",
     "torch.*",
+    "torchvision.*",
+    "PIL.*",
 ]
 ignore_missing_imports = true
 follow_imports = "skip"
+
+[[tool.mypy.overrides]]
+module = ["models.*"]
+follow_imports = "skip"
+ignore_errors = true
 
 # ── Build system ──────────────────────────────────────────────
 
