@@ -68,8 +68,10 @@ jobs:
       - name: Install dependencies
         run: |
           pip install --upgrade pip
-          pip install pyyaml numpy requests tqdm rich
+          pip install pyyaml requests tqdm rich
           pip install pytest pytest-cov
+          pip install numpy torch torchvision --index-url https://download.pytorch.org/whl/cpu
+          pip install yacs Pillow opencv-python-headless
 
       - name: Run tests
         run: python -m pytest tests/ -v --tb=short

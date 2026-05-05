@@ -66,28 +66,10 @@ profile_default/
 *.trt
 weights/
 checkpoints/
-models/
 
-# Eccezione: codice sorgente Simple-CCReID necessario a runtime
-# (config modello, backbone C2DResNet50, utilities, symlink top-level).
-# Git richiede di un-ignorare ogni livello di directory padre.
-!models/
+# Blocca tutto models/ tranne il codice sorgente Simple-CCReID
 models/*
 !models/simple_ccreid/
-models/simple_ccreid/*
-!models/simple_ccreid/configs/
-models/simple_ccreid/configs/*
-!models/simple_ccreid/configs/default_vid.py
-!models/simple_ccreid/models/
-models/simple_ccreid/models/*
-!models/simple_ccreid/models/__init__.py
-!models/simple_ccreid/models/vid_resnet.py
-!models/simple_ccreid/models/classifier.py
-!models/simple_ccreid/models/img_resnet.py
-!models/simple_ccreid/models/utils/
-models/simple_ccreid/models/utils/*
-!models/simple_ccreid/models/utils/*.py
-# Symlink top-level (puntano a simple_ccreid/models/*)
 !models/vid_resnet.py
 !models/classifier.py
 !models/img_resnet.py
@@ -106,10 +88,10 @@ data/processed/
 data/mevid-v1-annotation-data/
 data/mevid-v1-bbox-test/
 
-# Altre directory dati
-datasets/
-test_videos/
-gallery/
+# Altre directory dati (solo top-level)
+/datasets/
+/test_videos/
+/gallery/
 
 # ── Log & Output ─────────────────────────────────────────
 output/logs/

@@ -18,6 +18,7 @@ repos:
     hooks:
       - id: mypy
         args: [--config-file=pyproject.toml, --no-warn-unused-ignores]
+        exclude: ^models/
         additional_dependencies:
           - types-requests>=2.31.0
           - types-PyYAML>=6.0
@@ -29,7 +30,10 @@ repos:
       - id: trailing-whitespace
       - id: end-of-file-fixer
       - id: check-yaml
+        exclude: ^models/
       - id: check-merge-conflict
       - id: check-added-large-files
         args: [--maxkb=5000] # blocca file > 5 MB (modelli, video)
+        exclude: ^models/
       - id: debug-statements # blocca breakpoint() / pdb rimasti
+        exclude: ^models/
