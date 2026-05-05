@@ -23,12 +23,17 @@ from torchvision import transforms
 
 from src.config import (
     CONTAINMENT_THRESHOLD,
+    EDGE_MARGIN_RATIO,
     LOG_DIR,
     MAX_ASPECT_RATIO,
     MIN_ASPECT_RATIO,
     MIN_HEIGHT,
     MIN_WIDTH,
+    OVERLAP_IOU_THRESHOLD,
     PADDING_RATIO,
+    POSE_KPT_CONF_THRESHOLD,
+    POSE_KPT_MIN_HEIGHT,
+    POSE_MIN_UPPER_KEYPOINTS,
 )
 
 # ── Rich (opzionale) ─────────────────────────────────────────
@@ -82,15 +87,85 @@ def is_valid_roi(w: int, h: int) -> bool:
     """
     Verifica se una ROI è utilizzabile per la Re-Identification.
 
-    Criteri:
+    Criteri (allineati al paper MEVID: min 75px height, 25px width):
       1. Dimensione minima — crop troppo piccoli non hanno abbastanza dettaglio
-      2. Aspect ratio massimo — w/h > MAX_ASPECT_RATIO indica un falso positivo
-      3. Aspect ratio minimo — w/h < MIN_ASPECT_RATIO indica un artefatto (palo, bordo)
+      2. Aspect ratio massimo — w/h > MAX_ASPECT_RATIO indica un crop parziale
+      3. Aspect ratio minimo — w/h < MIN_ASPECT_RATIO indica un artefatto
     """
     if w < MIN_WIDTH or h < MIN_HEIGHT:
         return False
     ratio = w / h if h > 0 else float("inf")
     return MIN_ASPECT_RATIO <= ratio <= MAX_ASPECT_RATIO
+
+
+def is_edge_bbox(
+    x1: int,
+    y1: int,
+    x2: int,
+    y2: int,
+    frame_w: int,
+    frame_h: int,
+    margin_ratio: float = EDGE_MARGIN_RATIO,
+) -> bool:
+    """Rileva se una bbox tocca il bordo del frame (detection parziale).
+
+    Una persona tagliata dal bordo del frame (top, bottom, left, right)
+    produce crop inutili — solo piedi, solo testa, ecc.
+    Restituisce True se la bbox tocca almeno un bordo entro il margine.
+
+    NON filtra il bordo **superiore** né **laterale**: la testa tagliata
+    in alto e persone al bordo laterale sono comuni e spesso ancora utili.
+    Filtra solo il bordo **inferiore**: piedi tagliati dal basso indicano
+    che la persona sta entrando/uscendo dal frame.
+    """
+    margin_y = int(frame_h * margin_ratio)
+    # Solo bordo inferiore: se il bottom della bbox è al bordo del frame
+    # E il top non è vicino al top del frame (→ non è una persona piena)
+    at_bottom = y2 >= frame_h - margin_y
+    at_top = y1 <= margin_y
+    # Se tocca il bottom MA NON il top, è probabilmente solo la parte bassa
+    return at_bottom and not at_top
+
+
+def is_partial_body(
+    box: tuple[int, int, int, int],
+    frame_w: int,
+    frame_h: int,
+    kpt_conf: np.ndarray | None = None,
+) -> bool:
+    """Filtro ibrido pose-guided per detection parziali.
+
+    Strategia a due livelli (stile MEVID pose-guided filtering):
+
+    - **Detection grandi (h >= POSE_KPT_MIN_HEIGHT)**: i keypoint COCO sono
+      affidabili → la detection è parziale se meno di POSE_MIN_UPPER_KEYPOINTS
+      keypoint upper-body (indici 0-6: naso, occhi, orecchie, spalle) hanno
+      confidenza >= POSE_KPT_CONF_THRESHOLD.
+
+    - **Detection piccole (h < POSE_KPT_MIN_HEIGHT)** o senza keypoint:
+      fallback a ``is_edge_bbox()`` (euristica geometrica sul bordo inferiore).
+
+    Args:
+        box:      Bounding box (x1, y1, x2, y2) in pixel.
+        frame_w:  Larghezza del frame.
+        frame_h:  Altezza del frame.
+        kpt_conf: Array (17,) di confidenze per i 17 keypoint COCO,
+                  oppure None se il modello non fornisce keypoint.
+
+    Returns:
+        True se la detection è parziale e va scartata.
+    """
+    x1, y1, x2, y2 = box
+    box_h = y2 - y1
+
+    # Se abbiamo keypoint e la bbox è abbastanza grande da fidarsi
+    if kpt_conf is not None and box_h >= POSE_KPT_MIN_HEIGHT:
+        # Indici COCO upper-body: 0=nose, 1-2=eyes, 3-4=ears, 5-6=shoulders
+        upper_visible = int((kpt_conf[:7] >= POSE_KPT_CONF_THRESHOLD).sum())
+        return upper_visible < POSE_MIN_UPPER_KEYPOINTS
+
+    # Fallback euristico per detection piccole o senza keypoint
+    return is_edge_bbox(x1, y1, x2, y2, frame_w, frame_h)
 
 
 def suppress_contained_boxes(
@@ -137,9 +212,58 @@ def suppress_contained_boxes(
     # Azzera diagonale (una box non sopprime sé stessa)
     np.fill_diagonal(ratio, 0.0)
 
-    # Una bbox è soppressa se è la più piccola nella coppia E ratio >= threshold
-    is_smaller = areas[:, None] <= areas[None, :]  # (i, j): True se i è più piccola di j
+    # Una bbox è soppressa se è strettamente più piccola nella coppia E ratio >= threshold.
+    # Usiamo < invece di <= per evitare la soppressione reciproca quando le aree sono uguali.
+    is_smaller = (
+        areas[:, None] < areas[None, :]
+    )  # (i, j): True se i è strettamente più piccola di j
     suppressed = np.any((ratio >= threshold) & is_smaller, axis=1)
+
+    return cast("np.ndarray", ~suppressed)
+
+
+def suppress_overlapping_boxes(
+    boxes: np.ndarray,
+    threshold: float = OVERLAP_IOU_THRESHOLD,
+) -> np.ndarray:
+    """Sopprime bbox sovrapposte con IoU > threshold (stile MEVID paper).
+
+    Quando due detection si sovrappongono significativamente (IoU > 0.3),
+    la più piccola viene scartata. Questo filtra le detection ambigue in
+    scene affollate dove il tracker potrebbe confondere le identità.
+
+    A differenza di ``suppress_contained_boxes`` (che richiede contenimento
+    forte), questo filtro scatta anche con sovrapposizioni parziali.
+
+    Args:
+        boxes: Array (N, 4) in formato xyxy.
+        threshold: Soglia IoU minima per sopprimere.
+
+    Returns:
+        Indici booleani (N,) — True = mantieni, False = sopprimi.
+    """
+    n = len(boxes)
+    if n <= 1:
+        return np.ones(n, dtype=bool)
+
+    areas = (boxes[:, 2] - boxes[:, 0]) * (boxes[:, 3] - boxes[:, 1])
+
+    x1 = np.maximum(boxes[:, 0:1], boxes[:, 0])
+    y1 = np.maximum(boxes[:, 1:2], boxes[:, 1])
+    x2 = np.minimum(boxes[:, 2:3], boxes[:, 2])
+    y2 = np.minimum(boxes[:, 3:4], boxes[:, 3])
+    inter = np.maximum(0, x2 - x1) * np.maximum(0, y2 - y1)
+
+    union = areas[:, None] + areas[None, :] - inter
+    with np.errstate(divide="ignore", invalid="ignore"):
+        iou = np.where(union > 0, inter / union, 0.0)
+
+    np.fill_diagonal(iou, 0.0)
+
+    # La bbox strettamente più piccola nella coppia viene soppressa.
+    # Usiamo < invece di <= per evitare la soppressione reciproca quando le aree sono uguali.
+    is_smaller = areas[:, None] < areas[None, :]
+    suppressed = np.any((iou >= threshold) & is_smaller, axis=1)
 
     return cast("np.ndarray", ~suppressed)
 
@@ -368,3 +492,94 @@ def get_camera_id(video_name: str) -> str:
     """Estrae l'ID della telecamera dal nome video (es. 'G328')."""
     m = _VIDEO_PATTERN.match(video_name)
     return m.group(2) if m else video_name
+
+
+# ══════════════════════════════════════════════════════════════
+# ReID: utility condivise per sampling e aggregazione embedding
+# ══════════════════════════════════════════════════════════════
+
+
+def recombine_tracklet_clips(
+    n_frames: int,
+    seq_len: int,
+    stride: int = 4,
+) -> list[list[int]]:
+    """Suddivide una tracklet in clip dense (protocollo reference CCVID).
+
+    Replica ``_recombination_for_testset`` di simple_ccreid: genera tutte
+    le clip possibili con stride temporale, coprendo l'intera sequenza.
+    """
+    clips: list[list[int]] = []
+
+    full_segs = n_frames // (seq_len * stride)
+    for i in range(full_segs):
+        for j in range(stride):
+            begin = i * (seq_len * stride) + j
+            end = (i + 1) * (seq_len * stride)
+            clip = list(range(begin, end, stride))
+            clips.append(clip)
+
+    remainder = n_frames % (seq_len * stride)
+    if remainder != 0:
+        base_offset = full_segs * (seq_len * stride)
+        new_stride = remainder // seq_len
+        for i in range(new_stride):
+            begin = base_offset + i
+            end = base_offset + seq_len * new_stride
+            clip = list(range(begin, end, new_stride))
+            clips.append(clip)
+
+        if n_frames % seq_len != 0:
+            start = (n_frames // seq_len) * seq_len
+            clip = list(range(start, n_frames))
+            while len(clip) < seq_len:
+                clip = clip + clip
+            clips.append(clip[:seq_len])
+
+    # Fallback per tracklet molto corte
+    if not clips:
+        if n_frames >= seq_len:
+            clips.append(list(range(seq_len)))
+        else:
+            clip = list(range(n_frames))
+            while len(clip) < seq_len:
+                clip = clip + clip
+            clips.append(clip[:seq_len])
+
+    return clips
+
+
+def aggregate_embeddings(
+    embs_list: list[torch.Tensor],
+    min_intra_similarity: float | None = None,
+) -> torch.Tensor | None:
+    """Aggrega una lista di embedding con mean-pooling e L2-normalizzazione.
+
+    Opzionalmente filtra per consistenza intra-track (cosine similarity media
+    off-diagonal >= ``min_intra_similarity``).  Se il filtro fallisce, restituisce ``None``.
+
+    Args:
+        embs_list: Lista di tensori 1-D di embedding RAW (non normalizzati).
+        min_intra_similarity: Se fornito, scarta l'aggregato se la similarità
+            intra-track è inferiore alla soglia.
+
+    Returns:
+        Tensor L2-normalizzato [feat_dim] oppure ``None`` se scartato.
+    """
+    if not embs_list:
+        return None
+
+    stacked = torch.stack(embs_list)
+
+    if min_intra_similarity is not None and len(embs_list) > 1:
+        normed = torch.nn.functional.normalize(stacked, p=2, dim=1)
+        cos_sim = torch.mm(normed, normed.t())
+        n = cos_sim.size(0)
+        mask = ~torch.eye(n, dtype=torch.bool)
+        mean_sim = cos_sim[mask].mean().item()
+        if mean_sim < min_intra_similarity:
+            return None
+
+    super_emb = torch.mean(stacked, dim=0)
+    super_emb = torch.nn.functional.normalize(super_emb, p=2, dim=0)
+    return super_emb

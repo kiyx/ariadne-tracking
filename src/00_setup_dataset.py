@@ -210,7 +210,7 @@ def parse_args() -> argparse.Namespace:
     source.add_argument(
         "--subset",
         action="store_true",
-        help="Scarica solo 4 video di test multi-camera (~520 MB invece di ~127 GB)",
+        help="Scarica solo 3 video di test multi-camera (~390 MB invece di ~127 GB)",
     )
     source.add_argument(
         "--urls",
@@ -231,7 +231,7 @@ def main() -> None:
     # Determina sorgente URL
     if args.subset:
         urls_file = SUBSET_URLS_FILE
-        log.info("═══ Download subset MEVID (4 video, ~520 MB) ═══")
+        log.info("═══ Download subset MEVID (3 video, ~390 MB) ═══")
     elif args.urls:
         urls_file = Path(args.urls)
         log.info("═══ Download video da %s ═══", urls_file)

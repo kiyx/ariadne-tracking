@@ -5,6 +5,8 @@ da tracklet video. Carica il backbone C2DResNet50 pre-addestrato con
 Clothes-based Adversarial Loss (CAL) e applica la rete su batch di frame.
 """
 
+from __future__ import annotations
+
 import argparse
 import json
 import logging
@@ -21,12 +23,19 @@ from tqdm import tqdm
 
 from src.config import (
     DEFAULT_REID_WEIGHTS,
+    DEFAULT_SAMPLING_STRIDE,
     MIN_INTRA_TRACK_SIMILARITY,
     MIN_TRACK_FRAMES,
     PROJECT_ROOT,
     SEQ_LEN,
 )
-from src.utils import EVAL_TRANSFORM, load_reid_model, setup_logging
+from src.utils import (
+    EVAL_TRANSFORM,
+    aggregate_embeddings,
+    load_reid_model,
+    recombine_tracklet_clips,
+    setup_logging,
+)
 
 try:
     from rich.console import Console
@@ -47,6 +56,7 @@ class Mod2VideoResult:
     video: str
     identities: int = 0
     clips: int = 0
+    dropped_short_tracks: int = 0
     elapsed_sec: float = 0.0
     skipped: bool = False
 
@@ -79,6 +89,7 @@ class VideoTrackletDataset(Dataset):
     def __init__(self, video_dir: Path, seq_len: int = 8, transform=None):
         self.transform = transform
         self.chunks = []
+        self.dropped_short_tracks = 0
 
         tracks = sorted(
             [d for d in video_dir.iterdir() if d.is_dir() and d.name.startswith("Track_")]
@@ -90,34 +101,19 @@ class VideoTrackletDataset(Dataset):
             num_frames = len(image_files)
 
             if num_frames < MIN_TRACK_FRAMES:
+                self.dropped_short_tracks += 1
                 continue
 
             # Genera gli indici temporali per raggruppare i frame in clip
-            chunk_index_lists = self._sample_indices_uniform(num_frames, seq_len)
+            chunk_index_lists = recombine_tracklet_clips(
+                num_frames,
+                seq_len,
+                DEFAULT_SAMPLING_STRIDE,
+            )
 
             for indices in chunk_index_lists:
                 chunk_paths = [image_files[idx % num_frames] for idx in indices]
                 self.chunks.append((track_id, chunk_paths))
-
-    def _sample_indices_uniform(self, num_frames: int, seq_len: int) -> list[list[int]]:
-        """Finestra scorrevole con overlap 50%. Padding circolare se frame < seq_len."""
-        if num_frames <= seq_len:
-            base = list(range(num_frames))
-            padded = (base * ((seq_len // num_frames) + 2))[:seq_len]
-            return [padded]
-
-        chunks = []
-        for start in range(0, num_frames - seq_len + 1, seq_len // 2):
-            chunks.append(list(range(start, start + seq_len)))
-
-        seen = set()
-        unique = []
-        for c in chunks:
-            key = tuple(c)
-            if key not in seen:
-                seen.add(key)
-                unique.append(c)
-        return unique
 
     def __len__(self):
         return len(self.chunks)
@@ -156,8 +152,13 @@ def process_video_directory(
     t_start = time.time()
 
     dataset = VideoTrackletDataset(video_dir, seq_len=SEQ_LEN, transform=EVAL_TRANSFORM)
+    dropped_short = dataset.dropped_short_tracks
+
     if len(dataset) == 0:
-        return Mod2VideoResult(video=video_name)
+        return Mod2VideoResult(
+            video=video_name,
+            dropped_short_tracks=dropped_short,
+        )
 
     log.info("Elaborazione %s (Totale %d mini-clip)...", video_name, len(dataset))
 
@@ -181,39 +182,28 @@ def process_video_directory(
 
     embeddings_dict = {}
     for tid, embs_list in track_embs_accumulated.items():
-        stacked = torch.stack(embs_list)
-        super_emb = torch.mean(stacked, dim=0)
-        super_emb = torch.nn.functional.normalize(super_emb, p=2, dim=0)
-
-        # Filtro consistenza intra-track: se le clip di uno stesso track
-        # producono embedding molto diversi, è probabile un ID switch.
-        if len(embs_list) > 1:
-            normed = torch.nn.functional.normalize(stacked, p=2, dim=1)
-            cos_sim = torch.mm(normed, normed.t())
-            # Media delle similarità off-diagonal
-            n = cos_sim.size(0)
-            mask = ~torch.eye(n, dtype=torch.bool)
-            mean_sim = cos_sim[mask].mean().item()
-            if mean_sim < MIN_INTRA_TRACK_SIMILARITY:
-                log.debug(
-                    "Track %d scartata: similarità intra-track %.3f < %.2f",
-                    tid,
-                    mean_sim,
-                    MIN_INTRA_TRACK_SIMILARITY,
-                )
-                continue
-
-        embeddings_dict[tid] = super_emb
+        emb = aggregate_embeddings(
+            embs_list,
+            min_intra_similarity=MIN_INTRA_TRACK_SIMILARITY,
+        )
+        if emb is not None:
+            embeddings_dict[tid] = emb
+        else:
+            log.debug("Track %d scartata per similarità intra-track bassa", tid)
 
     elapsed = time.time() - t_start
 
     if embeddings_dict:
         torch.save(embeddings_dict, out_pt)
 
+    if device.type == "cuda":
+        torch.cuda.empty_cache()
+
     return Mod2VideoResult(
         video=video_name,
         identities=len(embeddings_dict),
         clips=len(dataset),
+        dropped_short_tracks=dropped_short,
         elapsed_sec=round(elapsed, 2),
     )
 
@@ -249,17 +239,26 @@ def _print_rich_summary(results: list[Mod2VideoResult], elapsed: float) -> None:
     console = Console()
     table = Table(title="Riepilogo Modulo 2 (CAL)")
     table.add_column("Video", style="cyan")
-    table.add_column("Identità Estratte", justify="right")
+    table.add_column("Identità", justify="right")
+    table.add_column("Clip", justify="right")
+    table.add_column("Scartate (corte)", justify="right")
     table.add_column("Tempo (s)", justify="right")
     table.add_column("Stato", justify="center")
 
     tot_tracks = 0
     for r in results:
         if r.skipped:
-            table.add_row(r.video, "-", "-", "[yellow]skipped[/yellow]")
+            table.add_row(r.video, "-", "-", "-", "-", "[yellow]skipped[/yellow]")
         else:
             tot_tracks += r.identities
-            table.add_row(r.video, str(r.identities), f"{r.elapsed_sec:.1f}", "[green]ok[/green]")
+            table.add_row(
+                r.video,
+                str(r.identities),
+                str(r.clips),
+                str(r.dropped_short_tracks),
+                f"{r.elapsed_sec:.1f}",
+                "[green]ok[/green]",
+            )
 
     console.print(table)
     console.print(

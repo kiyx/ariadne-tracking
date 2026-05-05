@@ -44,6 +44,7 @@ from src.config import (
     DEFAULT_SEED,
     DEFAULT_TRACKER,
     JPEG_QUALITY,
+    MIN_TRACK_FRAMES,
     PERSON_CLASS_ID,
     ROI_RESIZE,
     SHARPNESS_THRESHOLD,
@@ -53,11 +54,13 @@ from src.utils import (
     VideoInfo,
     get_engine_path,
     get_video_info,
+    is_partial_body,
     is_valid_roi,
     pad_and_clip_box,
     roi_sharpness,
     setup_logging,
     suppress_contained_boxes,
+    suppress_overlapping_boxes,
 )
 
 # ── Rich (opzionale, per logging colorato e tabella riepilogo) ─
@@ -103,6 +106,8 @@ class DiscardStats:
     low_sharpness: int = 0
     imwrite_failed: int = 0
     contained: int = 0
+    iou_overlap: int = 0
+    edge_partial: int = 0
 
 
 @dataclass
@@ -243,24 +248,28 @@ def load_model(model_path: str, imgsz: int, *, use_tensorrt: bool = False) -> YO
     """
     engine = get_engine_path(model_path, imgsz)
 
+    # Rileva automaticamente il task dal nome del modello
+    task = "pose" if "pose" in Path(model_path).stem else "detect"
+    log.info("Task YOLO rilevato: %s", task)
+
     if not use_tensorrt:
         log.info("Caricamento modello PyTorch: %s", model_path)
-        return YOLO(model_path, task="detect")
+        return YOLO(model_path, task=task)
 
     if engine.exists():
         log.info("Caricamento motore TensorRT: %s", engine)
-        return YOLO(str(engine), task="detect")
+        return YOLO(str(engine), task=task)
 
     # Export TensorRT FP16 (una tantum, ~2-5 min)
     log.info("Export TensorRT FP16 in corso (una tantum)...")
-    base = YOLO(model_path, task="detect")
+    base = YOLO(model_path, task=task)
     exported = Path(
         base.export(format="engine", half=True, imgsz=imgsz, simplify=True, device=0),
     )
     if exported != engine:
         shutil.move(str(exported), str(engine))
     log.info("Export completato → %s", engine)
-    return YOLO(str(engine), task="detect")
+    return YOLO(str(engine), task=task)
 
 
 # ══════════════════════════════════════════════════════════════
@@ -326,7 +335,11 @@ def _write_video_metadata(
     records: list[ROIRecord],
     status: str,
 ) -> None:
-    """Scrive ``metadata.json`` con info video, statistiche e record ROI."""
+    """Scrive ``metadata.json`` in modo atomico (write-then-rename).
+
+    Usa un file temporaneo ``.json.tmp`` e poi ``replace()`` per evitare
+    che un crash lasci un file JSON parzialmente scritto.
+    """
     data = {
         "video": video_name,
         "status": status,
@@ -342,7 +355,9 @@ def _write_video_metadata(
         "discarded": asdict(result.discarded),
         "records": [asdict(r) for r in records],
     }
-    path.write_text(json.dumps(data, indent=2, ensure_ascii=False), encoding="utf-8")
+    tmp_path = path.with_suffix(".json.tmp")
+    tmp_path.write_text(json.dumps(data, indent=2, ensure_ascii=False), encoding="utf-8")
+    tmp_path.replace(path)
 
 
 # ══════════════════════════════════════════════════════════════
@@ -427,6 +442,16 @@ def process_single_video(
                 tids = frame_result.boxes.id.int().cpu().numpy()
                 confs = frame_result.boxes.conf.cpu().numpy()
 
+                # Keypoint COCO (17, conf) — disponibili solo con modello pose
+                has_kpts = (
+                    hasattr(frame_result, "keypoints")
+                    and frame_result.keypoints is not None
+                    and frame_result.keypoints.conf is not None
+                )
+                kpts_conf = (
+                    frame_result.keypoints.conf.cpu().numpy() if has_kpts else None
+                )  # (N, 17) o None
+
                 # Sopprime bbox più piccole contenute in bbox più grandi
                 # (es. piedi rilevati dentro una detection a corpo intero)
                 keep_mask = suppress_contained_boxes(boxes)
@@ -436,8 +461,25 @@ def process_single_video(
                     boxes = boxes[keep_mask]
                     tids = tids[keep_mask]
                     confs = confs[keep_mask]
+                    if kpts_conf is not None:
+                        kpts_conf = kpts_conf[keep_mask]
 
-                for box, tid_np, conf in zip(boxes, tids, confs, strict=True):
+                # Sopprime detection con IoU > 0.3 (stile MEVID paper):
+                # in scene affollate le detection sovrapposte sono ambigue
+                if len(boxes) > 1:
+                    iou_mask = suppress_overlapping_boxes(boxes)
+                    n_iou = int((~iou_mask).sum())
+                    if n_iou > 0:
+                        discard.iou_overlap += n_iou
+                        boxes = boxes[iou_mask]
+                        tids = tids[iou_mask]
+                        confs = confs[iou_mask]
+                        if kpts_conf is not None:
+                            kpts_conf = kpts_conf[iou_mask]
+
+                for det_i, (box, tid_np, conf) in enumerate(
+                    zip(boxes, tids, confs, strict=True),
+                ):
                     tid = int(tid_np)
                     orig_box: tuple[int, int, int, int] = tuple(map(int, box))  # type: ignore[assignment]
 
@@ -450,6 +492,13 @@ def process_single_video(
                         and frame_counter[tid] % args.frame_skip != 0
                     ):
                         discard.frame_skip += 1
+                        continue
+
+                    # Filtra detection parziali: keypoint-guided per bbox grandi,
+                    # fallback euristico (bordo inferiore) per bbox piccole
+                    det_kpt = kpts_conf[det_i] if kpts_conf is not None else None
+                    if is_partial_body(orig_box, info.frame_w, info.frame_h, det_kpt):
+                        discard.edge_partial += 1
                         continue
 
                     # Estrai ROI (padding → validazione → crop → resize)
@@ -516,7 +565,29 @@ def process_single_video(
     finally:
         pbar.close()
 
-    # ── 4. Statistiche e metadata ──────────────────────────────
+    # ── 4. Filtro track corte (allinea Modulo 1 con Modulo 2) ──
+    if records:
+        track_counts: dict[int, int] = defaultdict(int)
+        for r in records:
+            track_counts[r.track_id] += 1
+
+        short_tracks = {tid for tid, count in track_counts.items() if count < MIN_TRACK_FRAMES}
+        if short_tracks:
+            for tid in short_tracks:
+                track_dir = video_out_dir / f"Track_{tid:04d}"
+                if track_dir.exists():
+                    shutil.rmtree(track_dir)
+            records = [r for r in records if r.track_id not in short_tracks]
+            saved_rois = len(records)
+            sharpness_vals = [r.sharpness for r in records]
+            log.info(
+                "%s: rimosse %d track corte (< %d frame)",
+                video_name,
+                len(short_tracks),
+                MIN_TRACK_FRAMES,
+            )
+
+    # ── 5. Statistiche e metadata ──────────────────────────────
     elapsed = time.time() - t_start
     status = "interrupted" if interrupted else "completed"
     quality = _compute_quality(sharpness_vals)

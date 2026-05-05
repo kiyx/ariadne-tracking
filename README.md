@@ -1,5 +1,7 @@
 # Ariadne Tracking
 
+[![CI](https://github.com/kiyx/ariadne-tracking/actions/workflows/ci.yml/badge.svg)](https://github.com/kiyx/ariadne-tracking/actions/workflows/ci.yml)
+
 ## Multi-Camera Person Tracking & Re-Identification
 
 > **Tesi di Laurea Triennale in Informatica**
@@ -47,7 +49,7 @@ persone su video di sorveglianza. Il sistema elabora video grezzi dal dataset
 | **Python**       | ≥ 3.10                                 |
 | **NVIDIA GPU**   | CUDA ≥ 12.x (testato su RTX 3060 6 GB) |
 | **Conda**        | Miniconda / Anaconda                   |
-| **Spazio disco** | ~200MB (subset 3 video)                |
+| **Spazio disco** | ~390MB (subset 3 video)                |
 
 ## Installazione
 
@@ -66,7 +68,7 @@ pip install torch torchvision --index-url https://download.pytorch.org/whl/cu126
 # 4. Dipendenze progetto
 pip install -r requirements.txt
 
-# 5. (Opzionale) Dashboard interattiva
+# 5. (Opzionale) Dashboard interattiva (Streamlit)
 pip install -e ".[viz]"
 
 # 6. (Opzionale) Tool di sviluppo (pytest, ruff, mypy)
@@ -78,14 +80,14 @@ pip install -e ".[dev]"
 ```bash
 conda activate ariadne_env
 
-# Download subset MEVID (3 video, ~400 MB)
+# Download subset MEVID (3 video, ~390 MB)
 python -m src.00_setup_dataset --subset
 
 # Pipeline completa
 python -m src.01_tracker_extractor          # Detection + tracking → ROI
 python -m src.02_feature_extractor          # Embedding Re-ID 2048-D
 python -m src.03_build_graph                # Grafo cross-camera
-python -m src.04_visualize_graph            # Dashboard → http://localhost:8050
+streamlit run src/04_visualize_graph.py     # Dashboard → http://localhost:8501
 ```
 
 Per usare **TensorRT FP16** (accelera la detection ~2×):
@@ -105,7 +107,7 @@ ariadne-tracking/
 │   ├── 01_tracker_extractor.py    # YOLO26 + BoT-SORT → ROI extraction
 │   ├── 02_feature_extractor.py    # C2DResNet50 + CAL → embedding 2048-D
 │   ├── 03_build_graph.py          # Grafo di movimento cross/intra-camera
-│   ├── 04_visualize_graph.py      # Dashboard interattiva (Dash)
+│   ├── 04_visualize_graph.py      # Dashboard interattiva (Streamlit)
 │   └── eval_mevid.py              # Benchmark MEVID ufficiale (CMC + mAP)
 ├── models/
 │   ├── yolo26m.pt                 # Pesi YOLO26m (detection)
@@ -128,7 +130,7 @@ ariadne-tracking/
 | Flag           | Default      | Descrizione                       |
 | :------------- | :----------- | :-------------------------------- |
 | `--model`      | `yolo26m.pt` | Modello YOLO                      |
-| `--conf`       | `0.65`       | Soglia confidenza detection       |
+| `--conf`       | `0.5`        | Soglia confidenza detection       |
 | `--frame-skip` | `3`          | Salva 1 ROI ogni N frame          |
 | `--imgsz`      | `640`        | Risoluzione input YOLO            |
 | `--tensorrt`   | off          | Accelerazione TensorRT FP16       |
@@ -153,12 +155,14 @@ ariadne-tracking/
 | `--threshold`    | `0.55`  | Soglia similarità minima per clustering       |
 | `--max-time-gap` | `300`   | Intervallo temporale massimo tra tracklet (s) |
 
-### `04_visualize_graph` — Dashboard
+### `04_visualize_graph` — Dashboard Streamlit
 
-| Flag      | Default | Descrizione             |
-| :-------- | :------ | :---------------------- |
-| `--graph` | auto    | Path specifico al grafo |
-| `--port`  | `8050`  | Porta del server Dash   |
+| Flag       | Default              | Descrizione                  |
+| :--------- | :------------------- | :--------------------------- |
+| `--graph`  | primo `graph_*.json` | Path specifico al grafo      |
+| `--roi-dir`| `data/processed`     | Directory con ROI/thumbnails |
+
+Avvio: `streamlit run src/04_visualize_graph.py -- --graph output/graph_*.json`
 
 ### `eval_mevid` — Benchmark Ufficiale
 
@@ -173,14 +177,15 @@ Costanti configurabili in [`src/config.py`](src/config.py):
 
 | Parametro                    | Valore  | Utilizzo                                     |
 | :--------------------------- | :------ | :------------------------------------------- |
-| `MIN_WIDTH` × `MIN_HEIGHT`   | 48×128  | Dimensione minima bbox accettata             |
+| `MIN_WIDTH` × `MIN_HEIGHT`   | 25×75   | Dimensione minima bbox accettata             |
 | `ROI_RESIZE`                 | 128×256 | Dimensione output ROI (w × h)                |
 | `PADDING_RATIO`              | 0.05    | Padding percentuale attorno alla bbox        |
 | `SHARPNESS_THRESHOLD`        | 15      | Soglia Laplaciana per scartare ROI sfocate   |
-| `CONTAINMENT_THRESHOLD`      | 0.70    | Soglia soppressione bbox contenute           |
+| `CONTAINMENT_THRESHOLD`      | 0.5     | Soglia soppressione bbox contenute           |
 | `MIN_TRACK_FRAMES`           | 8       | Frame minimi per considerare un track valido |
-| `MIN_INTRA_TRACK_SIMILARITY` | 0.60    | Similarità coseno minima intra-track         |
+| `MIN_INTRA_TRACK_SIMILARITY` | 0.4     | Similarità coseno minima intra-track         |
 | `SEQ_LEN`                    | 8       | Lunghezza sequenza temporale per C2DResNet   |
+| `DEFAULT_SAMPLING_STRIDE`    | 4       | Stride temporale sampling clip               |
 | `JPEG_QUALITY`               | 95      | Qualità di compressione JPEG                 |
 | `DEFAULT_SEED`               | 67      | Seed per riproducibilità                     |
 
@@ -194,7 +199,7 @@ Costanti configurabili in [`src/config.py`](src/config.py):
 | Clustering        | Agglomerativo (scipy)                         |
 | Framework DL      | PyTorch + TorchVision                         |
 | Accelerazione     | CUDA, TensorRT FP16                           |
-| Dashboard         | Dash + Cytoscape + Plotly                     |
+| Dashboard         | Streamlit + PyVis + Plotly                    |
 
 ## Dataset
 
@@ -205,13 +210,13 @@ Costanti configurabili in [`src/config.py`](src/config.py):
 
 ### Risultati Benchmark MEVID (protocollo standard)
 
-| Metrica | Valore |
-| :------ | -----: |
-| Rank-1  |  50.0% |
-| Rank-5  |  68.7% |
-| Rank-10 |  73.1% |
-| Rank-20 |  79.8% |
-| mAP     |  26.3% |
+| Metrica | Valore  |
+| :------ | -----:  |
+| Rank-1  |  52.53% |
+| Rank-5  |  66.77% |
+| Rank-10 |  72.78% |
+| Rank-20 |  80.70% |
+| mAP     |  27.01% |
 
 ## Licenza
 

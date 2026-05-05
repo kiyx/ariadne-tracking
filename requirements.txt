@@ -26,9 +26,6 @@ requests>=2.28.0
 # Re-Identification
 yacs>=0.1.8
 
-# Logging avanzato (colori, tabelle riepilogo)
-rich>=13.0.0
-
 # Clustering (Modulo 3)
 scipy>=1.10.0
 
@@ -36,4 +33,9 @@ scipy>=1.10.0
 rich>=13.0.0
 
 # Dashboard interattiva (Modulo 4) — opzionale
-# pip install dash dash-bootstrap-components dash-cytoscape Pillow plotly
+streamlit>=1.57.0
+pyvis>=0.3.2
+networkx>=3.0
+pandas>=2.0
+Pillow>=10.0.0
+plotly>=5.20.0

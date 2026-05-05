@@ -119,3 +119,9 @@ runs/
 wandb/
 logs/
 cache/
+backups/
+
+# RooCode
+.roomodes
+.roo/
+.clinerules
