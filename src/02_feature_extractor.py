@@ -90,6 +90,7 @@ class VideoTrackletDataset(Dataset):
         self.transform = transform
         self.chunks = []
         self.dropped_short_tracks = 0
+        self.corrupted_frames = 0
 
         tracks = sorted(
             [d for d in video_dir.iterdir() if d.is_dir() and d.name.startswith("Track_")]
@@ -120,16 +121,36 @@ class VideoTrackletDataset(Dataset):
 
     def __getitem__(self, idx):
         track_id, img_paths = self.chunks[idx]
-        frames_tensor_list = []
+        valid_frames = []
 
         for p in img_paths:
-            img = Image.open(p).convert("RGB")
+            try:
+                img = Image.open(p).convert("RGB")
+            except (OSError, Image.UnidentifiedImageError) as exc:
+                log.warning("Frame corrotto: %s — %s", p, exc)
+                self.corrupted_frames += 1
+                continue
             if self.transform:
                 img = self.transform(img)
-            frames_tensor_list.append(img)
+            valid_frames.append(img)
+
+        if not valid_frames:
+            # Clip interamente corrotta — restituisci zeri come fallback estremo
+            # (il modello produrrà embedding nullo, ma non crasherà)
+            zero_frame = (
+                self.transform(Image.new("RGB", (128, 256), color=(128, 128, 128)))
+                if self.transform
+                else torch.zeros(3, 256, 128)
+            )
+            valid_frames = [zero_frame] * len(img_paths)
+        elif len(valid_frames) < len(img_paths):
+            # Duplica l'ultimo frame valido per arrivare a seq_len
+            last = valid_frames[-1]
+            while len(valid_frames) < len(img_paths):
+                valid_frames.append(last)
 
         # [T, C, H, W] → [C, T, H, W] (layout atteso da C2DResNet)
-        clip_tensor = torch.stack(frames_tensor_list).permute(1, 0, 2, 3)
+        clip_tensor = torch.stack(valid_frames).permute(1, 0, 2, 3)
         return track_id, clip_tensor
 
 

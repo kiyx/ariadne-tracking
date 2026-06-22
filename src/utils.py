@@ -499,6 +499,101 @@ def get_camera_id(video_name: str) -> str:
 # ══════════════════════════════════════════════════════════════
 
 
+@dataclass
+class VideoMetadata:
+    """Metadati estratti dal nome file video MEVID."""
+
+    camera_id: str
+    date: str
+    scene_key: str
+    camera_node_id: str
+    location: str
+
+
+def parse_video_metadata(video_name: str) -> VideoMetadata | None:
+    """Estrae metadati temporali e spaziali dal nome file video MEVID.
+
+    Format atteso: ``YYYY-MM-DD.HH-MM-SS.HH-MM-SS.location.G###.rN``
+    """
+    # Prova pattern completo per data + location
+    m = _SCENE_PATTERN.match(video_name)
+    if m:
+        date = m.group(1)
+        location = m.group(4)
+        camera_id = m.group(5)
+        scene_key = f"{date}.{location}"
+        camera_node_id = f"{camera_id}_{date}"
+        return VideoMetadata(
+            camera_id=camera_id,
+            date=date,
+            scene_key=scene_key,
+            camera_node_id=camera_node_id,
+            location=location,
+        )
+
+    # Fallback al pattern video generico
+    m = _VIDEO_PATTERN.match(video_name)
+    if not m:
+        return None
+
+    scene = m.group(1)
+    camera_id = m.group(2)
+
+    # Tenta di estrarre data e location dallo scene
+    parts = scene.split(".")
+    if len(parts) >= 4:
+        date = parts[0]
+        location = parts[3] if len(parts) > 3 else "unknown"
+        scene_key = f"{date}.{location}"
+        camera_node_id = f"{camera_id}_{date}"
+    elif len(parts) >= 1:
+        date = parts[0]
+        location = "unknown"
+        scene_key = f"{date}.unknown"
+        camera_node_id = f"{camera_id}_{date}"
+    else:
+        date = "unknown"
+        location = "unknown"
+        scene_key = scene
+        camera_node_id = camera_id
+
+    return VideoMetadata(
+        camera_id=camera_id,
+        date=date,
+        scene_key=scene_key,
+        camera_node_id=camera_node_id,
+        location=location,
+    )
+
+
+def get_video_absolute_start(video_name: str) -> float:
+    """Restituisce il timestamp assoluto (epoch) di inizio del video.
+
+    Estrae data e ora dal nome file MEVID. Se il parsing fallisce,
+    restituisce 0.0 (fallback sicuro per differenze temporali).
+    """
+    parts = video_name.split(".")
+    if len(parts) >= 2:
+        date_str = parts[0]
+        time_str = parts[1].replace("-", ":")
+        dt_str = f"{date_str} {time_str}"
+        try:
+            dt = datetime.strptime(dt_str, "%Y-%m-%d %H:%M:%S")
+            return dt.timestamp()
+        except ValueError:
+            pass
+
+    # Fallback: prova a estrarre solo la data
+    if parts:
+        try:
+            dt = datetime.strptime(parts[0], "%Y-%m-%d")
+            return dt.timestamp()
+        except ValueError:
+            pass
+
+    return 0.0
+
+
 def recombine_tracklet_clips(
     n_frames: int,
     seq_len: int,

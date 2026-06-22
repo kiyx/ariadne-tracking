@@ -127,17 +127,17 @@ ariadne-tracking/
 
 ### `01_tracker_extractor` — Detection & Tracking
 
-| Flag           | Default      | Descrizione                       |
-| :------------- | :----------- | :-------------------------------- |
-| `--model`      | `yolo26m.pt` | Modello YOLO                      |
-| `--conf`       | `0.5`        | Soglia confidenza detection       |
-| `--frame-skip` | `3`          | Salva 1 ROI ogni N frame          |
-| `--imgsz`      | `640`        | Risoluzione input YOLO            |
-| `--tensorrt`   | off          | Accelerazione TensorRT FP16       |
-| `--no-resize`  | off          | Mantieni dimensione originale ROI |
-| `--force`      | off          | Riprocessa video già completati   |
-| `--show`       | off          | Preview detection in tempo reale  |
-| `--max-videos` | `0` (tutti)  | Limita elaborazione a N video     |
+| Flag           | Default           | Descrizione                       |
+| :------------- | :-----------      | :-------------------------------- |
+| `--model`      | `yolo26m-pose.pt` | Modello YOLO                      |
+| `--conf`       | `0.5`             | Soglia confidenza detection       |
+| `--frame-skip` | `3`               | Salva 1 ROI ogni N frame          |
+| `--imgsz`      | `640`             | Risoluzione input YOLO            |
+| `--tensorrt`   | off               | Accelerazione TensorRT FP16       |
+| `--no-resize`  | off               | Mantieni dimensione originale ROI |
+| `--force`      | off               | Riprocessa video già completati   |
+| `--show`       | off               | Preview detection in tempo reale  |
+| `--max-videos` | `0` (tutti)       | Limita elaborazione a N video     |
 
 ### `02_feature_extractor` — Embedding Re-ID
 
@@ -193,7 +193,7 @@ Costanti configurabili in [`src/config.py`](src/config.py):
 
 | Componente        | Tecnologia                                    |
 | :---------------- | :-------------------------------------------- |
-| Detection         | YOLO26m (Ultralytics)                         |
+| Detection         | YOLO26m-pose (Ultralytics)                    |
 | Tracking          | BoT-SORT                                      |
 | Re-Identification | C2DResNet50 + CAL (Clothes-Agnostic Learning) |
 | Clustering        | Agglomerativo (scipy)                         |

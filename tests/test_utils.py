@@ -7,11 +7,13 @@ from src.utils import (
     aggregate_embeddings,
     get_camera_id,
     get_engine_path,
+    get_video_absolute_start,
     group_by_scene,
     is_edge_bbox,
     is_partial_body,
     is_valid_roi,
     pad_and_clip_box,
+    parse_video_metadata,
     recombine_tracklet_clips,
     suppress_contained_boxes,
     suppress_overlapping_boxes,
@@ -292,3 +294,51 @@ class TestAggregateEmbeddings:
 
     def test_empty_list(self):
         assert aggregate_embeddings([]) is None
+
+
+class TestParseVideoMetadata:
+    def test_standard_name(self):
+        meta = parse_video_metadata("2018-05-18.15-05-01.15-10-01.bus.G507.r13")
+        assert meta is not None
+        assert meta.camera_id == "G507"
+        assert meta.date == "2018-05-18"
+        assert meta.scene_key == "2018-05-18.bus"
+        assert meta.camera_node_id == "G507_2018-05-18"
+
+    def test_scene_pattern_fallback(self):
+        meta = parse_video_metadata("2018-03-11.14-05-01.14-10-01.school.G328.r13")
+        assert meta is not None
+        assert meta.camera_id == "G328"
+        assert meta.date == "2018-03-11"
+        assert meta.scene_key == "2018-03-11.school"
+
+    def test_unknown_format(self):
+        assert parse_video_metadata("random_video") is None
+
+
+class TestGetVideoAbsoluteStart:
+    def test_standard_name(self):
+        ts = get_video_absolute_start("2018-05-18.15-05-01.15-10-01.bus.G507.r13")
+        assert ts > 0
+        from datetime import datetime
+
+        dt = datetime.fromtimestamp(ts)
+        assert dt.year == 2018
+        assert dt.month == 5
+        assert dt.day == 18
+        assert dt.hour == 15
+        assert dt.minute == 5
+        assert dt.second == 1
+
+    def test_date_only_fallback(self):
+        ts = get_video_absolute_start("2018-05-18.unknown.suffix")
+        assert ts > 0
+        from datetime import datetime
+
+        dt = datetime.fromtimestamp(ts)
+        assert dt.year == 2018
+        assert dt.month == 5
+        assert dt.day == 18
+
+    def test_unparseable(self):
+        assert get_video_absolute_start("random_video") == 0.0
