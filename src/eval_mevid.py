@@ -1,25 +1,7 @@
-"""Validazione ReID su MEVID bbox_test (protocollo ufficiale).
+"""Validazione Re-ID su MEVID bbox_test con protocollo ufficiale.
 
-Carica i crop ground-truth dal test split di MEVID, estrae le feature
-con il backbone CAL (C2DResNet50), separa query e gallery secondo
-``query_IDX.txt`` e calcola le metriche standard Re-ID:
-CMC Rank-1/5/10/20 e mAP.
-
-Protocollo di valutazione
--------------------------
-- Ogni riga di ``track_test_info.txt`` definisce un tracklet con
-  (start_idx, end_idx, person_id, outfit_id, camera_id).
-- ``query_IDX.txt`` indica quali tracklet (per indice di riga) sono query.
-- Le restanti tracklet formano la gallery.
-- Per ogni query si escludono dalla gallery i campioni con stessa
-  person_id E stessa camera_id (protocollo standard Re-ID).
-
-Input:
-    ``data/mevid-v1-bbox-test/bbox_test/{pid}/`` — crop GT per persona.
-    ``data/mevid-v1-annotation-data/``           — file di annotazione.
-
-Output:
-    Metriche CMC + mAP stampate a console e salvate in JSON.
+Carica i crop GT, estrae feature con C2DResNet50 CAL, separa query/gallery
+dal file query_IDX.txt e calcola CMC Rank-1/5/10/20 e mAP.
 """
 
 from __future__ import annotations
@@ -59,9 +41,7 @@ except ImportError:
 
 log = logging.getLogger(__name__)
 
-# ══════════════════════════════════════════════════════════════
-# Strutture dati
-# ══════════════════════════════════════════════════════════════
+# --- Strutture dati ---
 
 
 @dataclass
@@ -77,9 +57,7 @@ class Tracklet:
     track_id: int  # T### nel nome file
 
 
-# ══════════════════════════════════════════════════════════════
-# CLI
-# ══════════════════════════════════════════════════════════════
+# --- CLI ---
 
 
 def parse_args() -> argparse.Namespace:
@@ -107,13 +85,11 @@ def parse_args() -> argparse.Namespace:
     return p.parse_args()
 
 
-# ══════════════════════════════════════════════════════════════
-# Caricamento annotazioni MEVID
-# ══════════════════════════════════════════════════════════════
+# --- Caricamento annotazioni MEVID ---
 
 
 def load_tracklets(annotation_dir: Path) -> list[Tracklet]:
-    """Legge track_test_info.txt e ricava il vero T### da test_name.txt."""
+    """Legge track_test_info.txt e associa il T### reale da test_name.txt."""
     info_path = annotation_dir / "track_test_info.txt"
     name_path = annotation_dir / "test_name.txt"
 
@@ -153,7 +129,7 @@ def load_tracklets(annotation_dir: Path) -> list[Tracklet]:
 
 
 def load_query_indices(annotation_dir: Path) -> set[int]:
-    """Legge query_IDX.txt → set di indici (riga in track_test_info)."""
+    """Indici delle tracklet di query da query_IDX.txt."""
     idx_path = annotation_dir / "query_IDX.txt"
     indices: set[int] = set()
     with open(idx_path, encoding="utf-8") as f:
@@ -164,17 +140,11 @@ def load_query_indices(annotation_dir: Path) -> set[int]:
     return indices
 
 
-# ══════════════════════════════════════════════════════════════
-# Dataset per tracklet MEVID
-# ══════════════════════════════════════════════════════════════
+# --- Dataset per tracklet MEVID ---
 
 
 def tracklet_frame_paths(t: Tracklet, bbox_dir: Path) -> list[Path]:
-    """Costruisce i path delle immagini per una tracklet.
-
-    Il filename segue il formato MEVID:
-    ``{pid:04d}O{oid:03d}C{cid:03d}T{tid:03d}F{fid:05d}.jpg``
-    """
+    """Path delle immagini per una tracklet MEVID."""
     n_frames = t.end_idx - t.start_idx + 1
     person_dir = bbox_dir / f"{t.person_id:04d}"
     paths = []
@@ -189,8 +159,7 @@ def tracklet_frame_paths(t: Tracklet, bbox_dir: Path) -> list[Path]:
 class MevidTrackletDataset(Dataset):
     """Dataset che produce clip [C, T, H, W] per ogni tracklet MEVID.
 
-    Usa sampling denso stride-based (protocollo reference CCVID) per coprire
-    l'intera tracklet con clip sovrapposti.
+    Usa sampling stride-based per coprire l'intera tracklet.
     """
 
     def __init__(
@@ -230,9 +199,7 @@ class MevidTrackletDataset(Dataset):
         return tracklet_idx, clip_tensor
 
 
-# ══════════════════════════════════════════════════════════════
-# Estrazione feature
-# ══════════════════════════════════════════════════════════════
+# --- Estrazione feature ---
 
 
 @torch.no_grad()
@@ -244,14 +211,7 @@ def extract_all_features(
     batch_size: int,
     workers: int,
 ) -> dict[int, torch.Tensor]:
-    """Estrae un embedding L2-normalizzato per ogni tracklet.
-
-    Usa sampling denso stride-based e media delle feature RAW
-    (normalizzazione L2 solo sul vettore finale), come nel reference.
-
-    Returns:
-        Dict {tracklet_index: embedding [2048]}.
-    """
+    """Estrae un embedding L2-normalizzato per ogni tracklet."""
     dataset = MevidTrackletDataset(
         tracklets,
         bbox_dir,
@@ -289,15 +249,13 @@ def extract_all_features(
     return result
 
 
-# ══════════════════════════════════════════════════════════════
-# Metriche Re-ID (CMC + mAP)
-# ══════════════════════════════════════════════════════════════
+# --- Metriche Re-ID (CMC + mAP) ---
 
 
 def compute_ap_cmc(
     index: np.ndarray, good_index: np.ndarray, junk_index: np.ndarray
 ) -> tuple[float, np.ndarray]:
-    """Calcola AP e CMC per una singola query (standard Re-ID)."""
+    """AP e CMC per una singola query Re-ID."""
     ap = 0.0
     cmc = np.zeros(len(index))
 
@@ -330,11 +288,7 @@ def evaluate_reid(
     tracklets: list[Tracklet],
     query_indices: set[int],
 ) -> dict:
-    """Valutazione standard Re-ID: CMC Rank-1/5/10/20 e mAP.
-
-    Per ogni query, la gallery esclude i campioni con stessa
-    person_id E stessa camera_id (protocollo standard).
-    """
+    """Valutazione Re-ID: CMC Rank-1/5/10/20 e mAP."""
     # Separa query e gallery
     q_indices = sorted([i for i in query_indices if i in features])
     g_indices = sorted(
@@ -409,9 +363,7 @@ def evaluate_reid(
     return metrics
 
 
-# ══════════════════════════════════════════════════════════════
-# Output
-# ══════════════════════════════════════════════════════════════
+# --- Output ---
 
 
 def print_metrics(metrics: dict) -> None:
@@ -432,9 +384,7 @@ def print_metrics(metrics: dict) -> None:
         print()  # noqa: T201
 
 
-# ══════════════════════════════════════════════════════════════
-# Main
-# ══════════════════════════════════════════════════════════════
+# --- Main ---
 
 
 def main() -> None:
@@ -457,7 +407,7 @@ def main() -> None:
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     log.info("Device: %s", device)
 
-    # ── 1. Carica annotazioni ──
+    # 1. Carica annotazioni
     log.info("Caricamento annotazioni MEVID...")
     tracklets = load_tracklets(annotation_dir)
     query_indices = load_query_indices(annotation_dir)
@@ -479,11 +429,11 @@ def main() -> None:
         sys.exit(1)
     log.info("Verifica path OK: %s", sample_paths[0].name)
 
-    # ── 2. Carica modello ──
+    # 2. Carica modello
     log.info("Caricamento modello CAL...")
     model = load_reid_model(weights_path, device)
 
-    # ── 3. Estrai feature ──
+    # 3. Estrai feature
     t0 = time.perf_counter()
     log.info("Estrazione feature per %d tracklet...", len(tracklets))
     features = extract_all_features(
@@ -497,7 +447,7 @@ def main() -> None:
     elapsed = time.perf_counter() - t0
     log.info("Feature estratte per %d tracklet in %.1f s.", len(features), elapsed)
 
-    # ── 4. Valutazione ──
+    # 4. Valutazione
     log.info("Calcolo metriche Re-ID...")
     metrics = evaluate_reid(features, tracklets, query_indices)
 

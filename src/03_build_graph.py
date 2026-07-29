@@ -1,39 +1,16 @@
-"""Modulo 3 — Grafo di Movimento Globale (Scene-Agnostic) con Clustering Gerarchico 3-Fasi.
+"""Modulo 3 — Grafo di Movimento Globale con clustering gerarchico 3-fasi.
 
-Costruisce un grafo diretto pesato globale che collega tracklet
-appartenenti alla stessa identità stimata, con archi orientati dal
-primo al secondo avvistamento temporale.
+Costruisce un grafo diretto che collega tracklet della stessa identità stimata,
+con archi orientati cronologicamente. Il grafo è scene-agnostic: ogni video
+produce un nodo {camera}_{date}, così anche giorni diversi per la stessa
+camera restano separati.
 
-Il grafo è **scene-agnostic**: il clustering avviene su tutti i video
-disponibili, indipendentemente dalla scena. Ogni video costituisce un
-nodo-telecamera univoco (camera + data), risolvendo esplicitamente il
-problema del trattamento di giorni diversi per la stessa telecamera.
+Fasi del clustering:
+1. Intra-camera: stessa camera e stesso giorno, soglia alta.
+2. Cross-camera same-day: camere diverse, stesso giorno, soglia media.
+3. Cross-day: giorni diversi, soglia bassa.
 
-Clustering Gerarchico 3-Fasi
-----------------------------
-1. **Intra-Camera** (soglia alta): Fonde tracklet della stessa telecamera
-   nello stesso giorno. Ripara frammentazione del tracker locale (BoT-SORT).
-   Cannot-link con overlap temporale previene fusioni di persone diverse.
-
-2. **Cross-Camera Same-Day** (soglia media): Fonde micro-cluster di
-   telecamere diverse nello stesso giorno. Sfrutta continuità temporale
-   e similarità visiva tra camere vicine.
-
-3. **Cross-Day** (soglia bassa): Fonde meso-cluster di giorni diversi.
-   Accetta variazioni di illuminazione e outfit change del dataset MEVID.
-
-Algoritmo
----------
-1. Carica gli embedding (Modulo 2) e i metadati temporali (Modulo 1).
-2. Costruisce nodi: ogni video → nodo ``{camera_id}_{date}``.
-3. Esegue clustering gerarchico 3-fasi (intra-camera → cross-camera → cross-day).
-4. Genera archi diretti tra i membri di ogni cluster, orientati in
-   ordine cronologico, con vincoli spazio-temporali.
-5. Salva ``global_graph.json`` con topologia, identità e archi.
-
-Partizionamento dinamico (per scena, per gruppi di telecamere) è
-responsabilità del Modulo 4 (dashboard), che filtra il grafo globale
-a query time e applica path simplification.
+Output: global_graph.json.
 """
 
 from __future__ import annotations
@@ -74,9 +51,7 @@ DEFAULT_INPUT_DIR = PROJECT_ROOT / "data" / "processed" / "extracted_rois"
 DEFAULT_OUTPUT_DIR = PROJECT_ROOT / "output"
 
 
-# ══════════════════════════════════════════════════════════════
-# CLI
-# ══════════════════════════════════════════════════════════════
+# --- CLI ---
 
 
 def parse_args() -> argparse.Namespace:
@@ -97,19 +72,19 @@ def parse_args() -> argparse.Namespace:
         "--threshold-intra",
         type=float,
         default=0.45,
-        help="Soglia Fase 1 intra-camera (default: 0.45)",
+        help="Soglia coseno Fase 1 intra-camera (default: 0.45). Alta perché stessa camera/stesso giorno: aspetto coerente.",
     )
     p.add_argument(
         "--threshold-cross-cam",
         type=float,
         default=0.35,
-        help="Soglia Fase 2 cross-camera same-day (default: 0.35)",
+        help="Soglia coseno Fase 2 cross-camera same-day (default: 0.35). Più bassa per tollerare cambi di punto di vista.",
     )
     p.add_argument(
         "--threshold-cross-day",
         type=float,
         default=0.28,
-        help="Soglia Fase 3 cross-day (default: 0.28)",
+        help="Soglia coseno Fase 3 cross-day (default: 0.28). Bassa per accettare cambi di illuminazione/outfit.",
     )
     p.add_argument(
         "--min-gap-same-location",
@@ -123,23 +98,22 @@ def parse_args() -> argparse.Namespace:
         default=180.0,
         help="Min gap (s) per archi tra camere in location diverse (default: 180 = 3min)",
     )
+    p.add_argument(
+        "--strict-teleport-filter",
+        action="store_true",
+        help="Applica cannot-link hard durante il clustering basato su gap temporale (default: disabilitato)",
+    )
     return p.parse_args()
 
 
-# ══════════════════════════════════════════════════════════════
-# Caricamento metadati temporali
-# ══════════════════════════════════════════════════════════════
+# --- Caricamento metadati temporali ---
 
 
 def load_tracklet_times(
     input_dir: Path,
     video_names: list[str],
 ) -> dict[str, dict[int, float]]:
-    """Carica il tempo mediano assoluto di ogni tracklet da metadata.json.
-
-    Returns:
-        Dict ``{video_name: {track_id: absolute_median_time_seconds}}``.
-    """
+    """Tempo mediano assoluto di ogni tracklet, ricavato da metadata.json."""
     result: dict[str, dict[int, float]] = {}
 
     for video_name in video_names:
@@ -175,11 +149,7 @@ def load_tracklet_time_ranges(
     input_dir: Path,
     video_names: list[str],
 ) -> dict[str, dict[int, tuple[float, float]]]:
-    """Carica (start, end) assoluti di ogni tracklet da metadata.json.
-
-    Returns:
-        Dict ``{video_name: {track_id: (start_sec, end_sec)}}``.
-    """
+    """Intervallo (start, end) assoluto di ogni tracklet da metadata.json."""
     result: dict[str, dict[int, tuple[float, float]]] = {}
 
     for video_name in video_names:
@@ -210,9 +180,7 @@ def load_tracklet_time_ranges(
     return result
 
 
-# ══════════════════════════════════════════════════════════════
-# Clustering helpers
-# ══════════════════════════════════════════════════════════════
+# --- Clustering helpers ---
 
 
 def _cluster_group(
@@ -220,16 +188,7 @@ def _cluster_group(
     dist_matrix: np.ndarray,
     threshold: float,
 ) -> list[list[int]]:
-    """Clustering agglomerativo su un sottoinsieme di tracklet.
-
-    Args:
-        indices: Indici dei nodi da clusterizzare.
-        dist_matrix: Matrice distanza completa N×N.
-        threshold: Soglia similarità (0-1).
-
-    Returns:
-        Lista di cluster, ogni cluster è una lista di indici originali.
-    """
+    """Clustering gerarchico average-linkage su un gruppo di tracklet."""
     if len(indices) <= 1:
         return [[i] for i in indices]
 
@@ -250,19 +209,10 @@ def _cluster_clusters(
     dist_matrix: np.ndarray,
     threshold: float,
 ) -> list[list[int]]:
-    """Clustering a livello di cluster usando distanza originale (complete linkage).
+    """Fusione di cluster con complete linkage sulla distanza originale.
 
-    Evita il "blurring" della media degli embedding: misura la distanza
-    MASSIMA tra qualsiasi coppia di punti dei due cluster sulla matrice
-    distanza originale (complete linkage = conservativo).
-
-    Args:
-        clusters_list: Lista di cluster (ogni cluster = lista di indici).
-        dist_matrix: Matrice distanza originale N×N tra tracklet.
-        threshold: Soglia similarità (0-1).
-
-    Returns:
-        Lista di cluster fusi.
+    Usa la distanza massima tra coppie di punti dei due cluster, senza
+    mediare gli embedding: più conservativo e meno soggetto a blurring.
     """
     if len(clusters_list) <= 1:
         return clusters_list
@@ -288,9 +238,7 @@ def _cluster_clusters(
     return list(merged.values())
 
 
-# ══════════════════════════════════════════════════════════════
-# Costruzione grafo globale
-# ══════════════════════════════════════════════════════════════
+# --- Costruzione grafo globale ---
 
 
 def build_global_graph(
@@ -303,14 +251,15 @@ def build_global_graph(
     threshold_cross_day: float,
     min_gap_same_location: float,
     min_gap_diff_location: float,
+    strict_teleport_filter: bool = False,
 ) -> dict:
-    """Costruisce il grafo diretto globale con clustering gerarchico 3-fasi.
+    """Costruisce il grafo diretto globale con clustering 3-fasi.
 
-    Returns:
-        Dizionario con nodi, identità stimate, archi e statistiche.
+    strict_teleport_filter=True blocca il clustering di tracklet troppo vicine
+    nel tempo: utile solo se si conosce bene la mappa fisica delle camere.
     """
-    # ── 1. Costruisci lista nodi (tracklet) ──
-    nodes: list[dict] = []  # {video, track_id, camera_id, date, scene_key, node_id, location, time}
+    # 1. Lista nodi: ogni tracklet diventa un nodo
+    nodes: list[dict] = []
     embeddings: list[torch.Tensor] = []
 
     for video in video_names:
@@ -349,16 +298,17 @@ def build_global_graph(
 
     log.info("Grafo globale: %d tracklet da %d video.", n, len(video_names))
 
-    # ── 2. Matrice di similarità coseno ──
+    # 2. Similarità coseno tra tutti gli embedding
     emb_matrix = torch.stack(embeddings)
     emb_matrix = F.normalize(emb_matrix, p=2, dim=1)
     sim_matrix = torch.mm(emb_matrix, emb_matrix.t()).numpy()
 
-    # ── 3. Matrice distanza per clustering ──
+    # 3. Distanza = 1 - similarità
     dist_matrix = 1.0 - sim_matrix
     np.fill_diagonal(dist_matrix, 0.0)
 
-    # ── 3b. Vincoli cannot-link ──
+    # 3b. Cannot-link: tracklet dello stesso video con overlap temporale non possono
+    # essere la stessa persona. In modalità strict, blocca anche gap troppo brevi.
     cannot_link_penalty = 10.0
     for i in range(n):
         for j in range(i + 1, n):
@@ -374,7 +324,7 @@ def build_global_graph(
                     dist_matrix[j, i] = cannot_link_penalty
                 continue
 
-            if nodes[i]["date"] == nodes[j]["date"]:
+            if strict_teleport_filter and nodes[i]["date"] == nodes[j]["date"]:
                 time_diff = abs(nodes[i]["time"] - nodes[j]["time"])
                 loc_a = nodes[i].get("location", "unknown")
                 loc_b = nodes[j].get("location", "unknown")
@@ -383,11 +333,9 @@ def build_global_graph(
                     dist_matrix[i, j] = cannot_link_penalty
                     dist_matrix[j, i] = cannot_link_penalty
 
-    # ════════════════════════════════════════════════════════════
-    # CLUSTERING GERARCHICO 3-FASI
-    # ════════════════════════════════════════════════════════════
+    # --- Clustering 3-fasi ---
 
-    # Fase 1: Intra-Camera (stessa camera + stessa data)
+    # Fase 1: stessa camera e stesso giorno
     node_ids = sorted({n["node_id"] for n in nodes})
     intra_clusters: list[list[int]] = []
     for nid in node_ids:
@@ -400,7 +348,7 @@ def build_global_graph(
         threshold_intra,
     )
 
-    # Fase 2: Cross-Camera Same-Day (stessa data, camere diverse)
+    # Fase 2: stessa data, camere diverse
     dates = sorted({n["date"] for n in nodes})
     day_clusters: list[list[int]] = []
     for date in dates:
@@ -413,7 +361,7 @@ def build_global_graph(
         threshold_cross_cam,
     )
 
-    # Fase 3: Cross-Day (date diverse)
+    # Fase 3: giorni diversi
     final_clusters = _cluster_clusters(day_clusters, dist_matrix, threshold_cross_day)
     log.info(
         "Fase 3 cross-day: %d macro-cluster (soglia %.2f)",
@@ -423,7 +371,7 @@ def build_global_graph(
 
     clusters: dict[int, list[int]] = {i + 1: c for i, c in enumerate(final_clusters)}
 
-    # ── 6. Genera archi diretti (ordinati per tempo) ──
+    # 4. Genera archi diretti ordinati per tempo
     edges: list[dict] = []
     identities: dict[str, list[dict]] = {}
     identity_counter = 0
@@ -451,7 +399,7 @@ def build_global_graph(
 
         identities[identity_id] = identity_members
 
-        # Archi con vincoli spazio-temporali
+        # Salta archi troppo ravvicinati per la stessa location o location diverse
         for a, b in pairwise(members_sorted):
             node_a, node_b = nodes[a], nodes[b]
             time_gap = node_b["time"] - node_a["time"]
@@ -479,7 +427,7 @@ def build_global_graph(
                 }
             )
 
-    # ── 7. Costruisci nodi del grafo (video-telecamera) ──
+    # 5. Nodi del grafo: un nodo per ogni video-telecamera
     graph_nodes: dict[str, dict] = {}
     for node in nodes:
         nid = node["node_id"]
@@ -499,7 +447,7 @@ def build_global_graph(
             }
         )
 
-    # Statistiche
+    # 6. Statistiche
     n_singleton = sum(1 for m in clusters.values() if len(m) == 1)
     n_multi = sum(1 for m in clusters.values() if len(m) > 1)
     n_cross = sum(
@@ -533,6 +481,7 @@ def build_global_graph(
         "threshold_cross_day": threshold_cross_day,
         "min_gap_same_location": min_gap_same_location,
         "min_gap_diff_location": min_gap_diff_location,
+        "strict_teleport_filter": strict_teleport_filter,
         "nodes": list(graph_nodes.values()),
         "identities": identities,
         "edges": edges,
@@ -558,19 +507,18 @@ def _empty_graph_result(n_tracklets: int) -> dict:
         "threshold_cross_day": 0.0,
         "min_gap_same_location": 0.0,
         "min_gap_diff_location": 0.0,
+        "strict_teleport_filter": False,
         "nodes": [],
         "identities": {},
         "edges": [],
     }
 
 
-# ══════════════════════════════════════════════════════════════
-# Output
-# ══════════════════════════════════════════════════════════════
+# --- Output ---
 
 
 def _print_summary(graph: dict) -> None:
-    """Stampa riepilogo del grafo globale costruito."""
+    """Riepilogo testuale del grafo."""
     if _RICH:
         console = Console()
         table = Table(title="Grafo di Movimento Globale — Riepilogo")
@@ -604,9 +552,7 @@ def _print_summary(graph: dict) -> None:
         )
 
 
-# ══════════════════════════════════════════════════════════════
-# Main
-# ══════════════════════════════════════════════════════════════
+# --- Main ---
 
 
 def main() -> None:
@@ -623,13 +569,13 @@ def main() -> None:
     output_dir.mkdir(parents=True, exist_ok=True)
     t_start = time.time()
 
-    # ── 1. Carica embedding ──
+    # 1. Carica embedding
     all_embeddings = load_all_embeddings(input_dir)
     if not all_embeddings:
         log.error("Nessun embedding trovato in %s", input_dir)
         sys.exit(1)
 
-    # ── 2. Carica metadati temporali ──
+    # 2. Carica metadati temporali
     all_video_names = list(all_embeddings.keys())
     all_times = load_tracklet_times(input_dir, all_video_names)
     log.info(
@@ -638,10 +584,10 @@ def main() -> None:
         len(all_video_names),
     )
 
-    # ── 2b. Carica range temporali per cannot-link con overlap ──
+    # 2b. Range temporali per cannot-link
     all_time_ranges = load_tracklet_time_ranges(input_dir, all_video_names)
 
-    # ── 3. Costruisci grafo globale ──
+    # 3. Costruisci grafo globale
     graph = build_global_graph(
         video_names=all_video_names,
         all_embeddings=all_embeddings,
@@ -652,9 +598,10 @@ def main() -> None:
         threshold_cross_day=args.threshold_cross_day,
         min_gap_same_location=args.min_gap_same_location,
         min_gap_diff_location=args.min_gap_diff_location,
+        strict_teleport_filter=args.strict_teleport_filter,
     )
 
-    # Salva grafo globale
+    # 4. Salva grafo globale
     out_path = output_dir / "global_graph.json"
     out_path.write_text(
         json.dumps(graph, indent=2, ensure_ascii=False),

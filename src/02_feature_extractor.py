@@ -1,8 +1,7 @@
 """Modulo 2 — Feature Extraction (CAL / C2DResNet50) → Embedding.
 
-Pipeline di elaborazione per l'estrazione di feature vettoriali (embeddings)
-da tracklet video. Carica il backbone C2DResNet50 pre-addestrato con
-Clothes-based Adversarial Loss (CAL) e applica la rete su batch di frame.
+Carica C2DResNet50 pre-addestrato con CAL e produce un embedding per ogni
+tracklet a partire dalle ROI del Modulo 1.
 """
 
 from __future__ import annotations
@@ -62,12 +61,7 @@ class Mod2VideoResult:
 
 
 def parse_args() -> argparse.Namespace:
-    """Esegue il parsing degli argomenti da riga di comando.
-
-    Returns:
-        argparse.Namespace: Oggetto contenente i parametri di configurazione
-        come batch_size, directory di I/O e il numero di worker per il DataLoader.
-    """
+    """Parsing degli argomenti CLI del Modulo 2."""
     p = argparse.ArgumentParser(description="Modulo 2 – Feature Extraction Re-ID con CAL")
     p.add_argument(
         "--input-dir", default=str(PROJECT_ROOT / "data" / "processed" / "extracted_rois")
@@ -80,10 +74,9 @@ def parse_args() -> argparse.Namespace:
 
 
 class VideoTrackletDataset(Dataset):
-    """Dataset custom per il caricamento ottimizzato delle tracklet video.
+    """Dataset che carica frame JPEG di una tracklet e li raggruppa in clip.
 
-    Scansiona le directory alla ricerca di frame JPEG organizzati per track_id,
-    e raggruppa i frame in clip temporali di dimensione 'seq_len'.
+    Ogni elemento è una clip di seq_len frame da dare in pasto a C2DResNet50.
     """
 
     def __init__(self, video_dir: Path, seq_len: int = 8, transform=None):
@@ -105,7 +98,7 @@ class VideoTrackletDataset(Dataset):
                 self.dropped_short_tracks += 1
                 continue
 
-            # Genera gli indici temporali per raggruppare i frame in clip
+            # Genera gli indici delle clip sovrapposte
             chunk_index_lists = recombine_tracklet_clips(
                 num_frames,
                 seq_len,
@@ -119,7 +112,7 @@ class VideoTrackletDataset(Dataset):
     def __len__(self):
         return len(self.chunks)
 
-    def __getitem__(self, idx):
+    def __getitem__(self, idx: int):
         track_id, img_paths = self.chunks[idx]
         valid_frames = []
 
@@ -135,8 +128,7 @@ class VideoTrackletDataset(Dataset):
             valid_frames.append(img)
 
         if not valid_frames:
-            # Clip interamente corrotta — restituisci zeri come fallback estremo
-            # (il modello produrrà embedding nullo, ma non crasherà)
+            # Clip interamente corrotta: embedding nullo invece di crash
             zero_frame = (
                 self.transform(Image.new("RGB", (128, 256), color=(128, 128, 128)))
                 if self.transform
@@ -144,12 +136,12 @@ class VideoTrackletDataset(Dataset):
             )
             valid_frames = [zero_frame] * len(img_paths)
         elif len(valid_frames) < len(img_paths):
-            # Duplica l'ultimo frame valido per arrivare a seq_len
+            # Riempi con l'ultimo frame valido per arrivare a seq_len
             last = valid_frames[-1]
             while len(valid_frames) < len(img_paths):
                 valid_frames.append(last)
 
-        # [T, C, H, W] → [C, T, H, W] (layout atteso da C2DResNet)
+        # Layout atteso da C2DResNet: [C, T, H, W]
         clip_tensor = torch.stack(valid_frames).permute(1, 0, 2, 3)
         return track_id, clip_tensor
 
@@ -162,7 +154,7 @@ def process_video_directory(
     batch_size: int,
     workers: int,
 ) -> Mod2VideoResult:
-    """Inferenza batch → mean pooling → normalizzazione L2 → salvataggio .pt."""
+    """Embedding per un singolo video: batch inference, mean pooling, salvataggio .pt."""
     video_name = video_dir.name
     out_pt = video_dir / "embeddings.pt"
 
@@ -188,8 +180,8 @@ def process_video_directory(
         batch_size=batch_size,
         num_workers=workers,
         shuffle=False,
-        pin_memory=device.type == "cuda",
-        persistent_workers=workers > 0,
+        pin_memory=device.type == "cuda",  # velocizza trasferimento CPU→GPU
+        persistent_workers=workers > 0,  # evita di ricreare i processi ad ogni epoca
     )
     track_embs_accumulated = defaultdict(list)
 
@@ -235,7 +227,7 @@ def _save_report(
     args: argparse.Namespace,
     elapsed: float,
 ) -> None:
-    """Scrive ``pipeline_report_modulo2.json`` con statistiche aggregate."""
+    """Scrive pipeline_report_modulo2.json."""
     report_path = output_dir / "pipeline_report_modulo2.json"
     report_path.write_text(
         json.dumps(
@@ -256,7 +248,7 @@ def _save_report(
 
 
 def _print_rich_summary(results: list[Mod2VideoResult], elapsed: float) -> None:
-    """Tabella Rich con riepilogo per video."""
+    """Tabella Rich di riepilogo."""
     console = Console()
     table = Table(title="Riepilogo Modulo 2 (CAL)")
     table.add_column("Video", style="cyan")

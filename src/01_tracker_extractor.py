@@ -1,18 +1,13 @@
 """Modulo 1 — Detection (YOLO26) + Tracking (BoT-SORT) → ROI.
 
-Elabora una cartella di video, eseguendo person detection con YOLO26
-e tracking con BoT-SORT.  Per ogni persona tracciata vengono estratte
-le ROI (Region Of Interest) ritagliate e salvate come JPEG.
-
-Input:
-    Cartella di video (mp4, avi, mov, mkv, webm).
+Elabora una cartella di video, rileva le persone e le traccia con BoT-SORT.
+Per ogni persona tracciata salva le ROI come JPEG, più un metadata.json.
 
 Output:
-    Per ogni video → ``Track_XXXX/frame_YYYYYY.jpg`` + ``metadata.json``.
-    In più, un ``pipeline_report_modulo1.json`` globale con statistiche aggregate.
+    Per ogni video → Track_XXXX/frame_YYYYYY.jpg + metadata.json
+    Globale → pipeline_report_modulo1.json
 
-Le ROI estratte alimentano il Modulo 2 (Simple-CCReID)
-per il calcolo degli embedding di re-identificazione.
+Le ROI alimentano il Modulo 2 (Simple-CCReID) per gli embedding di Re-ID.
 """
 
 from __future__ import annotations
@@ -63,7 +58,7 @@ from src.utils import (
     suppress_overlapping_boxes,
 )
 
-# ── Rich (opzionale, per logging colorato e tabella riepilogo) ─
+# Rich opzionale per log colorato e tabella riepilogo
 
 try:
     from rich.console import Console
@@ -77,9 +72,7 @@ except ImportError:
 log = logging.getLogger(__name__)
 
 
-# ══════════════════════════════════════════════════════════════
-# Dataclass — risultati tipizzati
-# ══════════════════════════════════════════════════════════════
+# --- Dataclass dei risultati ---
 
 
 @dataclass
@@ -93,13 +86,7 @@ class QualityStats:
 
 @dataclass
 class DiscardStats:
-    """Conteggio delle ROI scartate, suddiviso per motivo.
-
-    - ``frame_skip``     — scartate dalla regola 1-ogni-N.
-    - ``invalid_roi``    — troppo piccole o con aspect ratio anomalo.
-    - ``low_sharpness``  — ROI troppo sfocate (sotto soglia nitidezza).
-    - ``imwrite_failed`` — errore di scrittura su disco.
-    """
+    """ROI scartate raggruppate per motivo."""
 
     frame_skip: int = 0
     invalid_roi: int = 0
@@ -140,18 +127,14 @@ class ROIRecord:
     file: str
 
 
-# ══════════════════════════════════════════════════════════════
-# Eccezione di configurazione
-# ══════════════════════════════════════════════════════════════
+# --- Eccezioni ---
 
 
 class ConfigError(ValueError):
     """Eccezione per parametri CLI non validi"""
 
 
-# ══════════════════════════════════════════════════════════════
-# Seed
-# ══════════════════════════════════════════════════════════════
+# --- Seed ---
 
 
 def set_seed(seed: int) -> None:
@@ -163,9 +146,7 @@ def set_seed(seed: int) -> None:
         torch.cuda.manual_seed_all(seed)
 
 
-# ══════════════════════════════════════════════════════════════
-# CLI
-# ══════════════════════════════════════════════════════════════
+# --- CLI ---
 
 
 def parse_args() -> argparse.Namespace:
@@ -175,12 +156,12 @@ def parse_args() -> argparse.Namespace:
         description="Modulo 1 – Detection + Tracking → ROI extraction",
     )
 
-    # ── Path e modello ────────────────────────────────────────
+    # Path e modello
     p.add_argument("--input-dir", default=str(DEFAULT_INPUT_DIR), help="Cartella video sorgente")
     p.add_argument("--output-dir", default=str(DEFAULT_OUTPUT_DIR), help="Cartella output ROI")
     p.add_argument("--model", default=str(DEFAULT_MODEL_PATH), help="Path modello YOLO (.pt)")
 
-    # ── Parametri pipeline ────────────────────────────────────
+    # Parametri pipeline
     p.add_argument("--conf", type=float, default=DEFAULT_CONF, help="Soglia confidence (0–1)")
     p.add_argument(
         "--frame-skip",
@@ -197,7 +178,7 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--seed", type=int, default=DEFAULT_SEED, help="Seed riproducibilità")
     p.add_argument("--max-videos", type=int, default=0, help="Limita a N video (0 = tutti)")
 
-    # ── Flag booleani ─────────────────────────────────────────
+    # Flag booleani
     p.add_argument("--no-resize", action="store_true", help="Non ridimensionare le ROI a 128×256")
     p.add_argument("--tensorrt", action="store_true", help="Usa TensorRT FP16 (richiede CUDA)")
     p.add_argument("--show", action="store_true", help="Preview detection in tempo reale")
@@ -231,20 +212,14 @@ def validate_args(args: argparse.Namespace) -> None:
         raise ConfigError("\n".join(errors))
 
 
-# ══════════════════════════════════════════════════════════════
-# Caricamento modello
-# ══════════════════════════════════════════════════════════════
+# --- Caricamento modello ---
 
 
 def load_model(model_path: str, imgsz: int, *, use_tensorrt: bool = False) -> YOLO:
-    """Carica YOLO nella modalità più veloce disponibile.
+    """Carica YOLO preferendo TensorRT, altrimenti PyTorch.
 
-    Priorità: engine TensorRT esistente → export TRT → PyTorch .pt.
-
-    Args:
-        model_path:   Path al file .pt del modello.
-        imgsz:        Risoluzione di input (per il nome dell'engine).
-        use_tensorrt: Se True, cerca/crea un engine TRT FP16.
+    Se l'engine non esiste lo genera una volta sola. FP16 riduce memoria e
+    aumenta il throughput sulle GPU NVIDIA recenti.
     """
     engine = get_engine_path(model_path, imgsz)
 
@@ -272,9 +247,7 @@ def load_model(model_path: str, imgsz: int, *, use_tensorrt: bool = False) -> YO
     return YOLO(str(engine), task=task)
 
 
-# ══════════════════════════════════════════════════════════════
-# Helper: estrazione e salvataggio ROI
-# ══════════════════════════════════════════════════════════════
+# --- Estrazione e salvataggio ROI ---
 
 
 def _extract_roi(
@@ -303,15 +276,15 @@ def _extract_roi(
 
 
 def _save_roi_jpeg(roi: np.ndarray, filepath: Path) -> bool:
-    """Scrive la ROI come JPEG con qualità configurata in ``config.py``."""
+    """Scrive la ROI come JPEG usando JPEG_QUALITY da config."""
     return bool(cv2.imwrite(str(filepath), roi, [cv2.IMWRITE_JPEG_QUALITY, JPEG_QUALITY]))
 
 
 def _compute_quality(sharpness_values: list[float]) -> QualityStats:
-    """Calcola le statistiche di qualità dalle sharpness delle ROI salvate.
+    """Classifica le ROI salvate in buone o mediocri in base alla nitidezza.
 
-    Dopo il filtraggio hard (ROI sotto SHARPNESS_THRESHOLD scartate),
-    le ROI rimaste vengono classificate in 'good' (> 2× soglia) o 'mediocre'.
+    Le ROI sotto SHARPNESS_THRESHOLD sono già state scartate; qui usiamo
+    2× la soglia come criterio per le "buone".
     """
     if not sharpness_values:
         return QualityStats()
@@ -322,9 +295,7 @@ def _compute_quality(sharpness_values: list[float]) -> QualityStats:
     return QualityStats(avg_sharpness=avg, good_rois=good, bad_rois=len(sharpness_values) - good)
 
 
-# ══════════════════════════════════════════════════════════════
-# Metadata I/O
-# ══════════════════════════════════════════════════════════════
+# --- Metadata I/O ---
 
 
 def _write_video_metadata(
@@ -335,10 +306,10 @@ def _write_video_metadata(
     records: list[ROIRecord],
     status: str,
 ) -> None:
-    """Scrive ``metadata.json`` in modo atomico (write-then-rename).
+    """Scrive metadata.json in modo atomico.
 
-    Usa un file temporaneo ``.json.tmp`` e poi ``replace()`` per evitare
-    che un crash lasci un file JSON parzialmente scritto.
+    write-then-rename: se il processo crasha durante la scrittura,
+    il vecchio metadata.json rimane intatto.
     """
     data = {
         "video": video_name,
@@ -360,9 +331,7 @@ def _write_video_metadata(
     tmp_path.replace(path)
 
 
-# ══════════════════════════════════════════════════════════════
-# Elaborazione singolo video
-# ══════════════════════════════════════════════════════════════
+# --- Elaborazione singolo video ---
 
 
 def process_single_video(
@@ -371,20 +340,16 @@ def process_single_video(
     output_base_dir: Path,
     args: argparse.Namespace,
 ) -> VideoResult:
-    """Pipeline completa per un singolo video: detection → tracking → ROI.
+    """Detection, tracking ed estrazione ROI per un singolo video.
 
-    Fasi:
-      1. **Resume check** — salta se ``metadata.json`` esiste già.
-      2. **Tracking** — ``model.track()``.
-      3. **Estrazione ROI** — per ogni detection: padding, validazione,
-         crop, resize, salvataggio JPEG.
-      4. **Statistiche** — sharpness, contatori, scrittura metadata.
+    Salta il video se esiste già metadata.json (a meno di --force).
+    Filtra ROI piccole, parziali, sfocate, duplicate; raggruppa per track ID.
     """
     video_name = Path(video_path).stem
     video_out_dir = output_base_dir / video_name
     meta_path = video_out_dir / "metadata.json"
 
-    # ── 1. Resume: salta video già elaborati ───────────────────
+    # 1. Resume: salta video già elaborati
     if meta_path.exists() and not args.force:
         log.info("Già elaborato, skip: %s", video_name)
         return VideoResult(video=video_name, skipped=True)
@@ -404,7 +369,7 @@ def process_single_video(
         info.total_frames,
     )
 
-    # ── 2. Tracking  ────
+    # 2. Tracking
     tracking_results = model.track(
         source=video_path,
         tracker=DEFAULT_TRACKER,
@@ -418,7 +383,7 @@ def process_single_video(
         show=args.show,
     )
 
-    # ── 3. Loop frame-by-frame ─────────────────────────────────
+    # 3. Loop frame-by-frame
     discard = DiscardStats()
     records: list[ROIRecord] = []
     sharpness_vals: list[float] = []
@@ -436,13 +401,13 @@ def process_single_video(
         for frame_result in tracking_results:
             frame = frame_result.orig_img
 
-            # Se nessuna detection ha un track ID assegnato, skip al frame dopo
+            # Se non c'è nessun ID tracciato, salta il frame
             if frame_result.boxes.id is not None:
                 boxes = frame_result.boxes.xyxy.cpu().numpy()
                 tids = frame_result.boxes.id.int().cpu().numpy()
                 confs = frame_result.boxes.conf.cpu().numpy()
 
-                # Keypoint COCO (17, conf) — disponibili solo con modello pose
+                # Keypoint COCO, solo con modello pose
                 has_kpts = (
                     hasattr(frame_result, "keypoints")
                     and frame_result.keypoints is not None
@@ -452,8 +417,7 @@ def process_single_video(
                     frame_result.keypoints.conf.cpu().numpy() if has_kpts else None
                 )  # (N, 17) o None
 
-                # Sopprime bbox più piccole contenute in bbox più grandi
-                # (es. piedi rilevati dentro una detection a corpo intero)
+                # Toglie bbox piccole contenute in una più grande (es. piedi)
                 keep_mask = suppress_contained_boxes(boxes)
                 n_suppressed = int((~keep_mask).sum())
                 if n_suppressed > 0:
@@ -464,8 +428,7 @@ def process_single_video(
                     if kpts_conf is not None:
                         kpts_conf = kpts_conf[keep_mask]
 
-                # Sopprime detection con IoU > 0.3 (stile MEVID paper):
-                # in scene affollate le detection sovrapposte sono ambigue
+                # In scene affollate le detection sovrapposte sono ambigue
                 if len(boxes) > 1:
                     iou_mask = suppress_overlapping_boxes(boxes)
                     n_iou = int((~iou_mask).sum())
@@ -483,8 +446,7 @@ def process_single_video(
                     tid = int(tid_np)
                     orig_box: tuple[int, int, int, int] = tuple(map(int, box))  # type: ignore[assignment]
 
-                    # Frame-skip: il primo frame di ogni track è sempre salvato,
-                    # poi solo ogni N-esimo (riduce il numero di ROI per track)
+                    # Primo frame della track sempre salvato, poi ogni N
                     frame_counter[tid] += 1
                     if (
                         args.frame_skip > 1
@@ -494,14 +456,13 @@ def process_single_video(
                         discard.frame_skip += 1
                         continue
 
-                    # Filtra detection parziali: keypoint-guided per bbox grandi,
-                    # fallback euristico (bordo inferiore) per bbox piccole
+                    # Scarta persone tagliate o con solo parte del corpo
                     det_kpt = kpts_conf[det_i] if kpts_conf is not None else None
                     if is_partial_body(orig_box, info.frame_w, info.frame_h, det_kpt):
                         discard.edge_partial += 1
                         continue
 
-                    # Estrai ROI (padding → validazione → crop → resize)
+                    # Estrai ROI
                     extraction = _extract_roi(
                         frame,
                         orig_box,
@@ -514,13 +475,13 @@ def process_single_video(
                         continue
                     roi, padded_box = extraction
 
-                    # Filtra ROI troppo sfocate prima del salvataggio
+                    # Scarta ROI troppo sfocate
                     sharp = roi_sharpness(roi)
                     if sharp < SHARPNESS_THRESHOLD:
                         discard.low_sharpness += 1
                         continue
 
-                    # Directory track (creata lazy, una sola volta per ID)
+                    # Crea la directory della track al primo frame utile
                     track_dir_name = f"Track_{tid:04d}"
                     if tid not in created_tracks:
                         (video_out_dir / track_dir_name).mkdir(parents=True, exist_ok=True)
@@ -565,7 +526,7 @@ def process_single_video(
     finally:
         pbar.close()
 
-    # ── 4. Filtro track corte (allinea Modulo 1 con Modulo 2) ──
+    # 4. Rimuove track troppo corte per il Modulo 2
     if records:
         track_counts: dict[int, int] = defaultdict(int)
         for r in records:
@@ -587,7 +548,7 @@ def process_single_video(
                 MIN_TRACK_FRAMES,
             )
 
-    # ── 5. Statistiche e metadata ──────────────────────────────
+    # 5. Statistiche e metadata
     elapsed = time.time() - t_start
     status = "interrupted" if interrupted else "completed"
     quality = _compute_quality(sharpness_vals)
@@ -618,9 +579,7 @@ def process_single_video(
     return result
 
 
-# ══════════════════════════════════════════════════════════════
-# Report globale
-# ══════════════════════════════════════════════════════════════
+# --- Report globale ---
 
 
 def _save_report(
@@ -713,9 +672,7 @@ def _print_rich_summary(
     )
 
 
-# ══════════════════════════════════════════════════════════════
-# Entry point
-# ══════════════════════════════════════════════════════════════
+# --- Entry point ---
 
 
 def main() -> None:
@@ -758,7 +715,7 @@ def main() -> None:
 
     try:
         for i, vf in enumerate(video_files, 1):
-            log.info("═══ Video %d/%d ═══", i, n)
+            log.info("--- Video %d/%d ---", i, n)
             try:
                 r = process_single_video(str(input_dir / vf), model, output_dir, args)
             except Exception:

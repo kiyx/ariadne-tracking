@@ -1,9 +1,8 @@
-"""Funzioni helper riusabili per la pipeline Ariadne Tracking.
+"""Helper puri usati in tutta la pipeline Ariadne Tracking.
 
-Raccoglie utility pure (non side-effect) per bounding-box,
-validazione ROI, path dei modelli TensorRT, metadati video,
-caricamento embedding e raggruppamento video per scena.
-Tutte le funzioni sono testabili in isolamento.
+Qui ci sono solo funzioni senza side-effect: bbox, validazione ROI,
+metadati video, caricamento embedding, parsing dei nomi MEVID.
+Tutto è testabile in isolamento.
 """
 
 from __future__ import annotations
@@ -36,7 +35,7 @@ from src.config import (
     POSE_MIN_UPPER_KEYPOINTS,
 )
 
-# ── Rich (opzionale) ─────────────────────────────────────────
+# Rich opzionale per log colorato
 
 try:
     from rich.logging import RichHandler
@@ -45,12 +44,12 @@ try:
 except ImportError:
     _RICH = False
 
-# ── Dataclass condivise ───────────────────────────────────────
+# --- Dataclass condivise ---
 
 
 @dataclass
 class VideoInfo:
-    """Metadati base di un file video (risoluzione, fps, durata)."""
+    """Risoluzione, fps e numero di frame di un video."""
 
     frame_w: int
     frame_h: int
@@ -67,11 +66,10 @@ def pad_and_clip_box(
     frame_h: int,
     ratio: float = PADDING_RATIO,
 ) -> tuple[int, int, int, int]:
-    """
-    Espande la bounding box proporzionalmente e la clippa ai bordi del frame.
+    """Espande la bbox del fattore PADDING_RATIO e la clippa al frame.
 
-    Il padding è proporzionale (non fisso in pixel) così che bbox grandi
-    ricevano un margine maggiore e bbox piccole uno adeguato alla loro scala.
+    Padding proporzionale: mantiene lo stesso margine relativo indipendentemente
+    dalla dimensione della persona.
     """
     w, h = x2 - x1, y2 - y1
     pad_x, pad_y = int(w * ratio), int(h * ratio)
@@ -84,13 +82,10 @@ def pad_and_clip_box(
 
 
 def is_valid_roi(w: int, h: int) -> bool:
-    """
-    Verifica se una ROI è utilizzabile per la Re-Identification.
+    """Controlla se una ROI ha dimensioni e aspect ratio ragionevoli per Re-ID.
 
-    Criteri (allineati al paper MEVID: min 75px height, 25px width):
-      1. Dimensione minima — crop troppo piccoli non hanno abbastanza dettaglio
-      2. Aspect ratio massimo — w/h > MAX_ASPECT_RATIO indica un crop parziale
-      3. Aspect ratio minimo — w/h < MIN_ASPECT_RATIO indica un artefatto
+    I limiti vengono dal paper MEVID: altezza minima 75 px, larghezza minima 25 px.
+    Aspect ratio troppo alto = crop parziale; troppo basso = artefatto.
     """
     if w < MIN_WIDTH or h < MIN_HEIGHT:
         return False
@@ -107,16 +102,11 @@ def is_edge_bbox(
     frame_h: int,
     margin_ratio: float = EDGE_MARGIN_RATIO,
 ) -> bool:
-    """Rileva se una bbox tocca il bordo del frame (detection parziale).
+    """True se la bbox sembra una persona tagliata dal bordo inferiore.
 
-    Una persona tagliata dal bordo del frame (top, bottom, left, right)
-    produce crop inutili — solo piedi, solo testa, ecc.
-    Restituisce True se la bbox tocca almeno un bordo entro il margine.
-
-    NON filtra il bordo **superiore** né **laterale**: la testa tagliata
-    in alto e persone al bordo laterale sono comuni e spesso ancora utili.
-    Filtra solo il bordo **inferiore**: piedi tagliati dal basso indicano
-    che la persona sta entrando/uscendo dal frame.
+    Filtriamo solo il bordo basso: i piedi tagliati sono un classico segnale
+    di persona che sta entrando o uscendo dal frame. I bordi alto e laterali
+    invece sono comuni e spesso comunque utili.
     """
     margin_y = int(frame_h * margin_ratio)
     # Solo bordo inferiore: se il bottom della bbox è al bordo del frame
@@ -133,27 +123,12 @@ def is_partial_body(
     frame_h: int,
     kpt_conf: np.ndarray | None = None,
 ) -> bool:
-    """Filtro ibrido pose-guided per detection parziali.
+    """Scarta detection parziali usando keypoint o, in fallback, la geometria.
 
-    Strategia a due livelli (stile MEVID pose-guided filtering):
-
-    - **Detection grandi (h >= POSE_KPT_MIN_HEIGHT)**: i keypoint COCO sono
-      affidabili → la detection è parziale se meno di POSE_MIN_UPPER_KEYPOINTS
-      keypoint upper-body (indici 0-6: naso, occhi, orecchie, spalle) hanno
-      confidenza >= POSE_KPT_CONF_THRESHOLD.
-
-    - **Detection piccole (h < POSE_KPT_MIN_HEIGHT)** o senza keypoint:
-      fallback a ``is_edge_bbox()`` (euristica geometrica sul bordo inferiore).
-
-    Args:
-        box:      Bounding box (x1, y1, x2, y2) in pixel.
-        frame_w:  Larghezza del frame.
-        frame_h:  Altezza del frame.
-        kpt_conf: Array (17,) di confidenze per i 17 keypoint COCO,
-                  oppure None se il modello non fornisce keypoint.
-
-    Returns:
-        True se la detection è parziale e va scartata.
+    Se la bbox è abbastanza alta (>= POSE_KPT_MIN_HEIGHT) ci fidiamo dei keypoint
+    COCO: servono almeno POSE_MIN_UPPER_KEYPOINTS upper-body visibili, altrimenti
+    la detection è probabilmente solo gambe/piedi.
+    Se la bbox è piccola i keypoint sono instabili, quindi usiamo is_edge_bbox.
     """
     x1, y1, x2, y2 = box
     box_h = y2 - y1
@@ -172,22 +147,11 @@ def suppress_contained_boxes(
     boxes: np.ndarray,
     threshold: float = CONTAINMENT_THRESHOLD,
 ) -> np.ndarray:
-    """Sopprime bbox più piccole contenute in bbox più grandi.
+    """Toglie bbox piccole contenute dentro bbox più grandi.
 
-    Per ogni coppia di detection, se l'area di intersezione copre
-    >= ``threshold`` della bbox più piccola, quest'ultima viene scartata.
-    Risolve le detection duplicate di piedi/parti del corpo che YOLO
-    produce quando una persona è già rilevata a corpo intero.
-
-    Complessità: O(N²) ma completamente vettorizzato con NumPy
-    (N = detection per frame, tipicamente 5–30).
-
-    Args:
-        boxes: Array (N, 4) in formato xyxy.
-        threshold: Frazione minima di contenimento per sopprimere.
-
-    Returns:
-        Indici booleani (N,) — True = mantieni, False = sopprimi.
+    YOLO a volte rileva piedi o parti del corpo dentro una detection completa:
+    se una bbox è contenuta per almeno ``threshold`` in una più grande, la scartiamo.
+    Vettorizzato in NumPy: N è piccolo (5-30 detection per frame), quindi O(N²) va bene.
     """
     n = len(boxes)
     if n <= 1:
@@ -226,21 +190,11 @@ def suppress_overlapping_boxes(
     boxes: np.ndarray,
     threshold: float = OVERLAP_IOU_THRESHOLD,
 ) -> np.ndarray:
-    """Sopprime bbox sovrapposte con IoU > threshold (stile MEVID paper).
+    """Toglie detection sovrapposte con IoU alta (stile MEVID).
 
-    Quando due detection si sovrappongono significativamente (IoU > 0.3),
-    la più piccola viene scartata. Questo filtra le detection ambigue in
-    scene affollate dove il tracker potrebbe confondere le identità.
-
-    A differenza di ``suppress_contained_boxes`` (che richiede contenimento
-    forte), questo filtro scatta anche con sovrapposizioni parziali.
-
-    Args:
-        boxes: Array (N, 4) in formato xyxy.
-        threshold: Soglia IoU minima per sopprimere.
-
-    Returns:
-        Indici booleani (N,) — True = mantieni, False = sopprimi.
+    Nelle scene affollate il tracker può confondersi: se due bbox si sovrappongono
+    troppo, teniamo solo la più grande. Rispetto a suppress_contained_boxes qui
+    basta una sovrapposizione parziale forte, non il contenimento completo.
     """
     n = len(boxes)
     if n <= 1:
@@ -269,31 +223,19 @@ def suppress_overlapping_boxes(
 
 
 def get_engine_path(pt_path: str, imgsz: int) -> Path:
-    """
-    Costruisce il path del file .engine TensorRT a partire dal .pt originale.
+    """Path dell'engine TensorRT derivato dal file .pt.
 
-    Convenzione: <nome_modello>_fp16_<imgsz>.engine nella stessa directory.
-    Codificare imgsz nel nome evita conflitti tra motori compilati con
-    risoluzioni diverse (640, 1280, ecc.).
+    Include imgsz nel nome per non mischiare engine compilati a risoluzioni diverse.
     """
     p = Path(pt_path)
     return p.parent / f"{p.stem}_fp16_{imgsz}.engine"
 
 
 def roi_sharpness(roi: np.ndarray) -> float:
-    """Calcola la nitidezza di una ROI usando la varianza del Laplaciano.
+    """Varianza del Laplaciano della ROI: valore basso = sfocata.
 
-    Un valore alto indica un'immagine nitida; un valore basso indica
-    sfocatura o occlusione parziale.
-
-    Args:
-        roi: Immagine BGR (numpy array) della ROI.
-
-    Returns:
-        Varianza del Laplaciano (float). Tipicamente:
-        - < 50  → molto sfocata
-        - 50–150 → mediocre
-        - > 150 → buona
+    Usata per scartare ROI mosse o con occlusioni. Indicativamente:
+    < 50 molto sfocata, 50-150 mediocre, > 150 buona.
     """
     import cv2
 
@@ -302,10 +244,10 @@ def roi_sharpness(roi: np.ndarray) -> float:
 
 
 def get_video_info(video_path: str) -> VideoInfo | None:
-    """Estrae metadati del video (risoluzione, fps, frame count).
+    """Legge risoluzione, fps e numero di frame da un video.
 
-    Apre e rilascia subito l'handle per evitare conflitti con
-    ``model.track()`` su Windows (due handle sullo stesso file = lock).
+    Apre e chiude subito l'handle: su Windows tenerne due aperti sullo stesso
+    file crea lock che possono interferire con model.track().
     """
     import cv2
 
@@ -323,17 +265,14 @@ def get_video_info(video_path: str) -> VideoInfo | None:
     return info
 
 
-# ══════════════════════════════════════════════════════════════
-# Logging condiviso (console + file)
-# ══════════════════════════════════════════════════════════════
+# --- Logging condiviso ---
 
 
 def setup_logging(module_name: str = "run") -> Path | None:
-    """Configura logging su console (Rich o plain) e su file.
+    """Attiva logging su console e su file.
 
-    Il file viene creato in ``output/logs/<module_name>_<timestamp>.log``.
-    Il guard ``if root.handlers`` evita handler duplicati se la funzione
-    viene chiamata più volte (ad es. nei test).
+    Scrive in output/logs/<module_name>_<timestamp>.log. Il controllo su
+    root.handlers evita handler duplicati se chiamata più volte (es. nei test).
     """
     root = logging.getLogger()
     if root.handlers:
@@ -368,9 +307,7 @@ def setup_logging(module_name: str = "run") -> Path | None:
         return None
 
 
-# ══════════════════════════════════════════════════════════════
-# ReID: trasformazione e caricamento modello
-# ══════════════════════════════════════════════════════════════
+# --- ReID: trasformazione e caricamento modello ---
 
 EVAL_TRANSFORM = transforms.Compose(
     [
@@ -382,11 +319,10 @@ EVAL_TRANSFORM = transforms.Compose(
 
 
 def load_reid_model(weights_path: Path, device: torch.device) -> torch.nn.Module:
-    """Carica C2DResNet50 con pesi CAL pre-addestrati.
+    """Carica C2DResNet50 con pesi CAL.
 
-    Gestisce la pulizia delle chiavi del dizionario di stato (rimuove il
-    prefisso ``module.`` generato da DataParallel) e valida il numero
-    di chiavi caricate.
+    Rimuove il prefisso 'module.' lasciato da DataParallel e controlla che
+    il numero di chiavi caricate sia sensato, altrimenti solleva un errore.
     """
     from models.simple_ccreid.configs.default_vid import _C  # pyright: ignore
     from models.simple_ccreid.models.vid_resnet import C2DResNet50  # pyright: ignore
@@ -432,28 +368,21 @@ def load_reid_model(weights_path: Path, device: torch.device) -> torch.nn.Module
     return model
 
 
-# ══════════════════════════════════════════════════════════════
-# Embedding & raggruppamento video per scena
-# ══════════════════════════════════════════════════════════════
+# --- Embedding e parsing metadati video ---
 
-# Pattern per estrarre scena e camera ID dal nome video MEVID.
-# Es: "2018-03-11.14-05-01.14-10-01.school.G328.r13"
-#   → scene = "2018-03-11.14-05-01.14-10-01.school"
-#   → cam   = "G328"
+# Estrae scene e camera ID dai nomi video MEVID, es. ...school.G328.r13
 _VIDEO_PATTERN = re.compile(r"^(.+)\.(G\d+)\.r\d+$")
 
-# Pattern più specifico per raggruppare video con offset di secondi diversi.
-# Cattura: data, ora_inizio(HH-MM), ora_fine(HH-MM), location — ignorando i secondi.
+# Come sopra ma ignora i secondi, così video con piccoli offset si raggruppano nella stessa scena.
 _SCENE_PATTERN = re.compile(
     r"^(\d{4}-\d{2}-\d{2})\.(\d{2}-\d{2})-\d{2}\.(\d{2}-\d{2})-\d{2}\.(\w+)\.(G\d+)\.r\d+$"
 )
 
 
 def load_all_embeddings(input_dir: Path) -> dict[str, dict[int, torch.Tensor]]:
-    """Carica ``embeddings.pt`` da tutte le directory video.
+    """Carica embeddings.pt da ogni directory video.
 
-    Returns:
-        Dict ``{video_name: {track_id: embedding_tensor}}``.
+    Ritorna {video_name: {track_id: embedding}}.
     """
     log = logging.getLogger(__name__)
     result: dict[str, dict[int, torch.Tensor]] = {}
@@ -467,10 +396,9 @@ def load_all_embeddings(input_dir: Path) -> dict[str, dict[int, torch.Tensor]]:
 
 
 def group_by_scene(video_names: list[str]) -> dict[str, list[str]]:
-    """Raggruppa i video per scena (stessa data + location, camera diversa).
+    """Raggruppa video che appartengono alla stessa scena (data + location).
 
-    I video con nome non corrispondente al pattern MEVID vengono
-    raggruppati sotto ``_ungrouped``.
+    I nomi che non rispettano il pattern finiscono in _ungrouped.
     """
     scenes: dict[str, list[str]] = defaultdict(list)
     for name in video_names:
@@ -489,19 +417,17 @@ def group_by_scene(video_names: list[str]) -> dict[str, list[str]]:
 
 
 def get_camera_id(video_name: str) -> str:
-    """Estrae l'ID della telecamera dal nome video (es. 'G328')."""
+    """Torna la camera ID dal nome video MEVID."""
     m = _VIDEO_PATTERN.match(video_name)
     return m.group(2) if m else video_name
 
 
-# ══════════════════════════════════════════════════════════════
-# ReID: utility condivise per sampling e aggregazione embedding
-# ══════════════════════════════════════════════════════════════
+# --- ReID: sampling e aggregazione embedding ---
 
 
 @dataclass
 class VideoMetadata:
-    """Metadati estratti dal nome file video MEVID."""
+    """Data, location e camera ID estratti dal nome video MEVID."""
 
     camera_id: str
     date: str
@@ -511,9 +437,9 @@ class VideoMetadata:
 
 
 def parse_video_metadata(video_name: str) -> VideoMetadata | None:
-    """Estrae metadati temporali e spaziali dal nome file video MEVID.
+    """Torna data, location e camera ID dal nome video MEVID.
 
-    Format atteso: ``YYYY-MM-DD.HH-MM-SS.HH-MM-SS.location.G###.rN``
+    Format: YYYY-MM-DD.HH-MM-SS.HH-MM-SS.location.G###.rN
     """
     # Prova pattern completo per data + location
     m = _SCENE_PATTERN.match(video_name)
@@ -567,10 +493,10 @@ def parse_video_metadata(video_name: str) -> VideoMetadata | None:
 
 
 def get_video_absolute_start(video_name: str) -> float:
-    """Restituisce il timestamp assoluto (epoch) di inizio del video.
+    """Timestamp epoch di inizio video, ricavato dal nome MEVID.
 
-    Estrae data e ora dal nome file MEVID. Se il parsing fallisce,
-    restituisce 0.0 (fallback sicuro per differenze temporali).
+    Se il formato non è riconoscibile torna 0.0: è sufficiente per calcolare
+    differenze temporali relative, anche se non assolute.
     """
     parts = video_name.split(".")
     if len(parts) >= 2:
@@ -599,10 +525,9 @@ def recombine_tracklet_clips(
     seq_len: int,
     stride: int = 4,
 ) -> list[list[int]]:
-    """Suddivide una tracklet in clip dense (protocollo reference CCVID).
+    """Genera clip sovrapposte da una tracklet (protocollo CCVID).
 
-    Replica ``_recombination_for_testset`` di simple_ccreid: genera tutte
-    le clip possibili con stride temporale, coprendo l'intera sequenza.
+    Copre tutta la sequenza con stride fisso, come fa simple_ccreid.
     """
     clips: list[list[int]] = []
 
@@ -648,18 +573,10 @@ def aggregate_embeddings(
     embs_list: list[torch.Tensor],
     min_intra_similarity: float | None = None,
 ) -> torch.Tensor | None:
-    """Aggrega una lista di embedding con mean-pooling e L2-normalizzazione.
+    """Media embedding della stessa tracklet e normalizza L2.
 
-    Opzionalmente filtra per consistenza intra-track (cosine similarity media
-    off-diagonal >= ``min_intra_similarity``).  Se il filtro fallisce, restituisce ``None``.
-
-    Args:
-        embs_list: Lista di tensori 1-D di embedding RAW (non normalizzati).
-        min_intra_similarity: Se fornito, scarta l'aggregato se la similarità
-            intra-track è inferiore alla soglia.
-
-    Returns:
-        Tensor L2-normalizzato [feat_dim] oppure ``None`` se scartato.
+    Se min_intra_similarity è impostato, scarta l'aggregato quando la similarità
+    media tra le clip è troppo bassa (tracklet probabilmente rumorosa).
     """
     if not embs_list:
         return None

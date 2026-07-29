@@ -1,20 +1,11 @@
 """Query e analisi statistiche sul grafo di movimento Ariadne.
 
-Funzioni pure (senza side-effect) per interrogare il grafo globale
-`global_graph.json` e produrre statistiche su percorsi, transizioni e
-attività telecamere. Nessuna dipendenza da UI o Streamlit.
+Funzioni pure per interrogare global_graph.json e produrre statistiche su
+percorsi, transizioni e attività delle telecamere. Nessuna dipendenza da UI.
 
-Esempi::
-
-    from pathlib import Path
-    from src.graph_queries import GraphQueries
-
+Esempi:
     gq = GraphQueries(Path("output/global_graph.json"))
-
-    # Chi ha percorso G505 -> G507 ?
     results = gq.query_by_path(["G505", "G507"])
-
-    # Statistiche transizioni
     stats = gq.get_transition_statistics()
 """
 
@@ -31,7 +22,7 @@ if TYPE_CHECKING:
 
 @dataclass(frozen=True)
 class PathMatch:
-    """Risultato di una query per percorso."""
+    """Risultato di query_by_path."""
 
     identity_id: str
     camera_sequence: list[str]
@@ -45,7 +36,7 @@ class PathMatch:
 
 @dataclass(frozen=True)
 class TransitionStat:
-    """Statistica di una singola transizione camera->camera."""
+    """Statistica di una transizione camera→camera."""
 
     src_camera: str
     dst_camera: str
@@ -58,7 +49,7 @@ class TransitionStat:
 
 @dataclass(frozen=True)
 class CameraActivity:
-    """Attività aggregata per una telecamera."""
+    """Attività aggregata per una camera."""
 
     camera_id: str
     total_identities: int
@@ -70,8 +61,7 @@ class CameraActivity:
 class GraphQueries:
     """Interfaccia di interrogazione del grafo globale.
 
-    Carica il JSON una sola volta e mantiene indici in memoria
-    per query veloci.
+    Carica il JSON una volta e costruisce indici per query rapide.
     """
 
     def __init__(self, graph_path: Path) -> None:
@@ -92,7 +82,7 @@ class GraphQueries:
         self._build_index()
 
     def _build_index(self) -> None:
-        """Costruisce indici percorso -> identità per query O(1)."""
+        """Costruisce indici percorso → identità per query rapide."""
         for iid, members in self.identities.items():
             if not members:
                 continue
@@ -104,7 +94,7 @@ class GraphQueries:
             dates = [m.get("date", "?") for m in members]
             self._identity_paths[iid] = (cams, nodes, times, tids, dates)
 
-    # ── Query per percorso ───────────────────────────────────────
+    # --- Query per percorso ---
 
     def query_by_path(
         self,
@@ -116,13 +106,8 @@ class GraphQueries:
 
         Args:
             path_pattern: Lista di camera_id, es. ["G505", "G507", "G639"].
-            allow_subsequence: Se True, accetta anche sotto-sequenze
-                (es. A->B->C->D matcha A->B->C). Se False, richiede
-                match esatto.
-            date_filter: Se specificato, filtra per data (es. "2018-05-18").
-
-        Returns:
-            Lista di ``PathMatch`` con metadati del percorso.
+            allow_subsequence: Se True, accetta anche sotto-sequenze.
+            date_filter: Se specificato, filtra per data.
         """
         if not path_pattern:
             return []
@@ -171,7 +156,7 @@ class GraphQueries:
         pattern: list[str],
         allow_subsequence: bool,
     ) -> int | None:
-        """Trova il primo indice dove `pattern` appare in `seq`."""
+        """Primo indice in cui appare `pattern` in `seq`."""
         if not pattern:
             return 0
 
@@ -192,17 +177,17 @@ class GraphQueries:
 
         return None
 
-    # ── Query per identità ───────────────────────────────────────
+    # --- Query per identità ---
 
     def query_by_identity(self, identity_id: str) -> list[dict]:
-        """Restituisce tutti i membri (avvistamenti) di un'identità."""
+        """Restituisce tutti gli avvistamenti di un'identità."""
         members = self.identities.get(identity_id, [])
         if not members:
             return []
         return sorted(members, key=lambda m: m["time"])
 
     def get_identity_summary(self, identity_id: str) -> dict | None:
-        """Restituisce un riepilogo strutturato di un'identità."""
+        """Riepilogo strutturato di un'identità."""
         members = self.query_by_identity(identity_id)
         if not members:
             return None
@@ -227,10 +212,10 @@ class GraphQueries:
             "is_cross_day": len(set(dates)) > 1,
         }
 
-    # ── Statistiche transizioni ──────────────────────────────────
+    # --- Statistiche transizioni ---
 
     def get_transition_statistics(self) -> list[TransitionStat]:
-        """Calcola statistiche per ogni transizione camera->camera."""
+        """Statistiche per ogni transizione camera→camera."""
         trans_counts: dict[tuple[str, str], int] = defaultdict(int)
         trans_gaps: dict[tuple[str, str], list[float]] = defaultdict(list)
         trans_cross_day: dict[tuple[str, str], int] = defaultdict(int)
@@ -265,7 +250,7 @@ class GraphQueries:
     def get_transition_matrix(
         self,
     ) -> dict[str, dict[str, dict[str, int]] | list[str] | dict[str, dict[str, float | None]]]:
-        """Matrice transizioni camera×camera con conteggi e gap."""
+        """Matrice transizioni camera×camera con conteggi e gap medi."""
         all_cams: list[str] = sorted(
             {edge["src_camera"] for edge in self.edges}
             | {edge["dst_camera"] for edge in self.edges}
@@ -294,12 +279,12 @@ class GraphQueries:
             },
         }
 
-    # ── Statistiche percorsi ─────────────────────────────────────
+    # --- Statistiche percorsi ---
 
     def get_path_statistics(self, top_k: int = 10) -> list[dict]:
         """Percorsi (sequenze di camere) più comuni tra le identità.
 
-        Esclude percorsi mono-camera (intra-camera).
+        Esclude percorsi mono-camera.
         """
         path_counts: Counter = Counter()
         path_durations: dict[tuple[str, ...], list[float]] = defaultdict(list)
@@ -335,10 +320,10 @@ class GraphQueries:
 
         return results
 
-    # ── Attività per telecamera ──────────────────────────────────
+    # --- Attività per telecamera ---
 
     def get_camera_activity(self) -> list[CameraActivity]:
-        """Attività aggregata per ogni telecamera fisica."""
+        """Attività aggregata per ogni camera fisica."""
         cam_stats: dict[str, dict] = defaultdict(
             lambda: {"identities": set(), "tracklets": 0, "dates": set()}
         )
@@ -370,10 +355,10 @@ class GraphQueries:
 
         return results
 
-    # ── Cross-day / Cross-camera stats ───────────────────────────
+    # --- Cross-day / Cross-camera stats ---
 
     def get_cross_statistics(self) -> dict:
-        """Statistiche aggregate cross-camera e cross-day."""
+        """Statistiche aggregate su cross-camera e cross-day."""
         cross_cam_identities = []
         cross_day_identities = []
         both_identities = []
@@ -405,10 +390,10 @@ class GraphQueries:
             "cross_day_ratio": round(len(cross_day_identities) / max(len(self.identities), 1), 3),
         }
 
-    # ── Global metrics ───────────────────────────────────────────
+    # --- Global metrics ---
 
     def get_global_metrics(self) -> dict:
-        """Restituisce tutte le metriche globali del grafo."""
+        """Tutte le metriche globali del grafo."""
         return {
             "num_nodes": len(self.nodes),
             "num_identities": len(self.identities),

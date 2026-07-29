@@ -1,8 +1,6 @@
-"""Configurazione centralizzata del progetto Ariadne Tracking.
+"""Costanti e parametri centralizzati della pipeline Ariadne Tracking.
 
-Questo modulo definisce tutte le costanti e i parametri della pipeline
-in un unico punto. I valori possono essere sovrascritti dai flag CLI
-dei singoli moduli.
+Tutti i valori sono sovrascrivibili dai flag CLI dei singoli moduli.
 """
 
 from __future__ import annotations
@@ -14,7 +12,7 @@ from pathlib import Path
 _SRC_DIR = Path(__file__).resolve().parent
 PROJECT_ROOT = _SRC_DIR.parent
 
-# ── Costanti di detection / tracking ──────────────────────────
+# --- Detection / tracking ---
 
 PERSON_CLASS_ID = 0
 MIN_WIDTH = 25
@@ -22,36 +20,32 @@ MIN_HEIGHT = 75
 MAX_ASPECT_RATIO = 0.75
 MIN_ASPECT_RATIO = 0.2
 DEFAULT_CONF = 0.5
-DEFAULT_FRAME_SKIP = 3
+DEFAULT_FRAME_SKIP = 3  # salva 1 frame ogni 3: buon compromesso tra spazio e tracking
 DEFAULT_IMGSZ = 640
 DEFAULT_TRACKER = "botsort.yaml"
 
-# ── Costanti di estrazione ROI ────────────────────────────────
+# --- Estrazione ROI ---
 
-ROI_RESIZE = (128, 256)  # (w, h)
+ROI_RESIZE = (128, 256)  # ingresso standard per la maggior parte dei modelli Re-ID
 PADDING_RATIO = 0.05
 JPEG_QUALITY = 95
 
-# ── Filtri sovrapposizione (stile MEVID paper) ────────────────
+# --- Filtri sovrapposizione (stile MEVID paper) ---
 
-OVERLAP_IOU_THRESHOLD = 0.3  # Detection con IoU > 0.3 → scarta la più piccola
-CONTAINMENT_THRESHOLD = 0.5  # Sopprime bbox contenute per >=50% in una più grande
+OVERLAP_IOU_THRESHOLD = 0.3
+CONTAINMENT_THRESHOLD = 0.5
 
-# ── Filtro bordo frame (detection parziali) ───────────────────
+# --- Detection parziali sul bordo ---
 
-EDGE_MARGIN_RATIO = 0.02  # Se la bbox tocca il bordo entro il 2% del frame → partial
+EDGE_MARGIN_RATIO = 0.02
 
-# ── Pose-guided filtering ─────────────────────────────────────
+# --- Pose-guided filtering ---
 
-# Altezza minima della bbox (in pixel) per fidarsi dei keypoint.
-# Sotto questa soglia i keypoint sono inaffidabili e si usa il fallback
-# euristico (is_edge_bbox). Sopra, il filtro usa i keypoint COCO.
+# Sotto 150 px i keypoint COCO diventano troppo instabili: usiamo solo la geometria.
 POSE_KPT_MIN_HEIGHT = 150
-# Confidenza minima perché un keypoint sia considerato "visibile"
 POSE_KPT_CONF_THRESHOLD = 0.5
-# Numero minimo di keypoint upper-body (indici 0-6: nose, occhi, orecchie,
-# spalle) che devono essere visibili per considerare la detection completa.
-# Se meno di questo → detection parziale (solo gambe/piedi/torso basso).
+# Upper-body COCO: nose, eyes, ears, shoulders. Se ne mancano troppi, la detection
+# è probabilmente tagliata (gambe/piedi) e non serve per Re-ID.
 POSE_MIN_UPPER_KEYPOINTS = 2
 
 # ── Formati video supportati ──────────────────────────────────
@@ -65,21 +59,25 @@ DEFAULT_OUTPUT_DIR = PROJECT_ROOT / "data" / "processed" / "extracted_rois"
 DEFAULT_MODEL_PATH = PROJECT_ROOT / "models" / "yolo26m-pose.pt"
 LOG_DIR = PROJECT_ROOT / "output" / "logs"
 
-# ── Soglia qualità ROI ─────────────────────────────────────────
+# --- Qualità ROI ---
 
+# Valore calibrato sul subset MEVID: sotto ~10 la ROI è troppo sfocata,
+# sopra ~20 è nitida. 15 bilancia qualità e recall.
 SHARPNESS_THRESHOLD = 15
 
-# ── Filtro track ────────────────────────────────────────────────
+# --- Filtro track ---
 
-MIN_TRACK_FRAMES = 8  # Track con meno di N frame vengono scartate
-MIN_INTRA_TRACK_SIMILARITY = 0.4  # Similarità coseno minima intra-track
+MIN_TRACK_FRAMES = 8
+# Media della similarità coseno tra le clip di una stessa tracklet.
+# Se troppo bassa, le clip probabilmente contengono occlusioni o cambi di pose.
+MIN_INTRA_TRACK_SIMILARITY = 0.4
 
-# ── ReID / Feature extraction ─────────────────────────────────
+# --- ReID / Feature extraction ---
 
-SEQ_LEN = 8  # Lunghezza sequenza temporale per C2DResNet50
-DEFAULT_SAMPLING_STRIDE = 4  # Stride temporale sampling clip (protocollo CCVID)
+SEQ_LEN = 8  # atteso da C2DResNet50 (protocollo CCVID)
+DEFAULT_SAMPLING_STRIDE = 4  # campionamento denso tra clip sovrapposte
 DEFAULT_REID_WEIGHTS = PROJECT_ROOT / "models" / "CAL_best_model.pth.tar"
 
-# ── Seed di default ───────────────────────────────────────────
+# --- Seed ---
 
 DEFAULT_SEED = 67
