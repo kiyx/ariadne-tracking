@@ -7,7 +7,7 @@ Output:
     Per ogni video → Track_XXXX/frame_YYYYYY.jpg + metadata.json
     Globale → pipeline_report_modulo1.json
 
-Le ROI alimentano il Modulo 2 (Simple-CCReID) per gli embedding di Re-ID.
+Le ROI alimentano il Modulo 2 per gli embedding di Re-ID.
 """
 
 from __future__ import annotations

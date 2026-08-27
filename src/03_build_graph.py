@@ -86,23 +86,6 @@ def parse_args() -> argparse.Namespace:
         default=0.28,
         help="Soglia coseno Fase 3 cross-day (default: 0.28). Bassa per accettare cambi di illuminazione/outfit.",
     )
-    p.add_argument(
-        "--min-gap-same-location",
-        type=float,
-        default=15.0,
-        help="Min gap (s) per archi tra camere della stessa location (default: 15)",
-    )
-    p.add_argument(
-        "--min-gap-diff-location",
-        type=float,
-        default=180.0,
-        help="Min gap (s) per archi tra camere in location diverse (default: 180 = 3min)",
-    )
-    p.add_argument(
-        "--strict-teleport-filter",
-        action="store_true",
-        help="Applica cannot-link hard durante il clustering basato su gap temporale (default: disabilitato)",
-    )
     return p.parse_args()
 
 
@@ -249,15 +232,8 @@ def build_global_graph(
     threshold_intra: float,
     threshold_cross_cam: float,
     threshold_cross_day: float,
-    min_gap_same_location: float,
-    min_gap_diff_location: float,
-    strict_teleport_filter: bool = False,
 ) -> dict:
-    """Costruisce il grafo diretto globale con clustering 3-fasi.
-
-    strict_teleport_filter=True blocca il clustering di tracklet troppo vicine
-    nel tempo: utile solo se si conosce bene la mappa fisica delle camere.
-    """
+    """Costruisce il grafo diretto globale con clustering 3-fasi."""
     # 1. Lista nodi: ogni tracklet diventa un nodo
     nodes: list[dict] = []
     embeddings: list[torch.Tensor] = []
@@ -308,7 +284,7 @@ def build_global_graph(
     np.fill_diagonal(dist_matrix, 0.0)
 
     # 3b. Cannot-link: tracklet dello stesso video con overlap temporale non possono
-    # essere la stessa persona. In modalità strict, blocca anche gap troppo brevi.
+    # essere la stessa persona.
     cannot_link_penalty = 10.0
     for i in range(n):
         for j in range(i + 1, n):
@@ -323,15 +299,6 @@ def build_global_graph(
                     dist_matrix[i, j] = cannot_link_penalty
                     dist_matrix[j, i] = cannot_link_penalty
                 continue
-
-            if strict_teleport_filter and nodes[i]["date"] == nodes[j]["date"]:
-                time_diff = abs(nodes[i]["time"] - nodes[j]["time"])
-                loc_a = nodes[i].get("location", "unknown")
-                loc_b = nodes[j].get("location", "unknown")
-                min_gap = min_gap_same_location if loc_a == loc_b else min_gap_diff_location
-                if time_diff < min_gap:
-                    dist_matrix[i, j] = cannot_link_penalty
-                    dist_matrix[j, i] = cannot_link_penalty
 
     # --- Clustering 3-fasi ---
 
@@ -399,16 +366,10 @@ def build_global_graph(
 
         identities[identity_id] = identity_members
 
-        # Salta archi troppo ravvicinati per la stessa location o location diverse
+        # Collega ogni coppia consecutiva senza assumere una topologia fisica.
         for a, b in pairwise(members_sorted):
             node_a, node_b = nodes[a], nodes[b]
             time_gap = node_b["time"] - node_a["time"]
-
-            loc_a = node_a.get("location", "unknown")
-            loc_b = node_b.get("location", "unknown")
-            min_gap = min_gap_same_location if loc_a == loc_b else min_gap_diff_location
-            if time_gap < min_gap:
-                continue
 
             edges.append(
                 {
@@ -479,9 +440,6 @@ def build_global_graph(
         "threshold_intra": threshold_intra,
         "threshold_cross_cam": threshold_cross_cam,
         "threshold_cross_day": threshold_cross_day,
-        "min_gap_same_location": min_gap_same_location,
-        "min_gap_diff_location": min_gap_diff_location,
-        "strict_teleport_filter": strict_teleport_filter,
         "nodes": list(graph_nodes.values()),
         "identities": identities,
         "edges": edges,
@@ -505,9 +463,6 @@ def _empty_graph_result(n_tracklets: int) -> dict:
         "threshold_intra": 0.0,
         "threshold_cross_cam": 0.0,
         "threshold_cross_day": 0.0,
-        "min_gap_same_location": 0.0,
-        "min_gap_diff_location": 0.0,
-        "strict_teleport_filter": False,
         "nodes": [],
         "identities": {},
         "edges": [],
@@ -596,9 +551,6 @@ def main() -> None:
         threshold_intra=args.threshold_intra,
         threshold_cross_cam=args.threshold_cross_cam,
         threshold_cross_day=args.threshold_cross_day,
-        min_gap_same_location=args.min_gap_same_location,
-        min_gap_diff_location=args.min_gap_diff_location,
-        strict_teleport_filter=args.strict_teleport_filter,
     )
 
     # 4. Salva grafo globale

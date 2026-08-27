@@ -52,11 +52,11 @@ stessa identità anche tra giorni diversi.
 
 ## Requisiti
 
-| Requisito        | Versione minima                        |
-| :--------------- | :------------------------------------- |
-| **Python**       | ≥ 3.10                                 |
-| **NVIDIA GPU**   | CUDA ≥ 12.x (testato su RTX 3060 6 GB) |
-| **Conda**        | Miniconda / Anaconda                   |
+| Requisito      | Versione minima                        |
+| :------------- | :------------------------------------- |
+| **Python**     | ≥ 3.10                                 |
+| **NVIDIA GPU** | CUDA ≥ 12.x (testato su RTX 3060 6 GB) |
+| **Conda**      | Miniconda / Anaconda                   |
 
 ## Installazione
 
@@ -161,14 +161,11 @@ ariadne-tracking/
 
 ### `03_build_graph` — Costruzione Grafo
 
-| Flag                        | Default | Descrizione                                              |
-| :-------------------------- | :------ | :------------------------------------------------------- |
-| `--threshold-intra`         | `0.45`  | Soglia coseno Fase 1: intra-camera/stesso giorno         |
-| `--threshold-cross-cam`     | `0.35`  | Soglia coseno Fase 2: cross-camera/stesso giorno         |
-| `--threshold-cross-day`     | `0.28`  | Soglia coseno Fase 3: cross-day                          |
-| `--min-gap-same-location`   | `15`    | Gap minimo (s) per archi nella stessa location           |
-| `--min-gap-diff-location`   | `180`   | Gap minimo (s) per archi tra location diverse            |
-| `--strict-teleport-filter`  | off     | Cannot-link hard basato su gap temporale                 |
+| Flag                    | Default | Descrizione                                      |
+| :---------------------- | :------ | :----------------------------------------------- |
+| `--threshold-intra`     | `0.45`  | Soglia coseno Fase 1: intra-camera/stesso giorno |
+| `--threshold-cross-cam` | `0.35`  | Soglia coseno Fase 2: cross-camera/stesso giorno |
+| `--threshold-cross-day` | `0.28`  | Soglia coseno Fase 3: cross-day                  |
 
 ### `04_visualize_graph` — Dashboard Streamlit
 
@@ -178,13 +175,13 @@ streamlit run src/04_visualize_graph.py
 
 ### `eval_mevid` — Benchmark Ufficiale
 
-| Flag               | Default                             | Descrizione             |
-| :------------------| :---------------------------------- | :---------------------- |
-| `--bbox-dir`       | `data/mevid-v1-bbox-test`           | Crop GT                 |
-| `--annotation-dir` | `data/mevid-v1-annotation-data`     | Annotazioni             |
-| `--weights`        | `CAL_best_model.pth.tar`            | Pesi CAL                |
-| `--batch-size`     | `16`                                | Batch size DataLoader   |
-| `--workers`        | `2`                                 | Worker DataLoader       |
+| Flag               | Default                         | Descrizione           |
+| :----------------- | :------------------------------ | :-------------------- |
+| `--bbox-dir`       | `data/mevid-v1-bbox-test`       | Crop GT               |
+| `--annotation-dir` | `data/mevid-v1-annotation-data` | Annotazioni           |
+| `--weights`        | `CAL_best_model.pth.tar`        | Pesi CAL              |
+| `--batch-size`     | `16`                            | Batch size DataLoader |
+| `--workers`        | `2`                             | Worker DataLoader     |
 
 ## Parametri della Pipeline
 
@@ -206,15 +203,15 @@ Costanti configurabili in [`src/config.py`](src/config.py):
 
 ## Tecnologie
 
-| Componente           | Tecnologia                                     |
-| :------------------- | :--------------------------------------------- |
-| Detection            | YOLO26m-pose (Ultralytics)                     |
-| Tracking             | BoT-SORT                                       |
-| Re-Identification    | C2DResNet50 + CAL (Clothes-Agnostic Learning)  |
-| Clustering           | Agglomerativo gerarchico 3-fasi (scipy)        |
-| Framework DL         | PyTorch + TorchVision                          |
-| Accelerazione        | CUDA, TensorRT FP16                            |
-| Visualizzazione      | Streamlit + PyVis + Plotly                     |
+| Componente        | Tecnologia                                    |
+| :---------------- | :-------------------------------------------- |
+| Detection         | YOLO26m-pose (Ultralytics)                    |
+| Tracking          | BoT-SORT                                      |
+| Re-Identification | C2DResNet50 + CAL (Clothes-Agnostic Learning) |
+| Clustering        | Agglomerativo gerarchico 3-fasi (scipy)       |
+| Framework DL      | PyTorch + TorchVision                         |
+| Accelerazione     | CUDA, TensorRT FP16                           |
+| Visualizzazione   | Streamlit + PyVis + Plotly                    |
 
 ## Dataset
 
@@ -225,13 +222,13 @@ Costanti configurabili in [`src/config.py`](src/config.py):
 
 ### Risultati Benchmark MEVID (protocollo standard)
 
-| Metrica | Valore  |
-| :------ | ------: |
-| Rank-1  |  52.53% |
-| Rank-5  |  66.77% |
-| Rank-10 |  72.78% |
-| Rank-20 |  80.70% |
-| mAP     |  27.01% |
+| Metrica | Valore |
+| :------ | -----: |
+| Rank-1  | 52.53% |
+| Rank-5  | 66.77% |
+| Rank-10 | 72.78% |
+| Rank-20 | 80.70% |
+| mAP     | 27.01% |
 
 ## Validazione e Qualità
 
