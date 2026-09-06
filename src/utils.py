@@ -234,8 +234,10 @@ def get_engine_path(pt_path: str, imgsz: int) -> Path:
 def roi_sharpness(roi: np.ndarray) -> float:
     """Varianza del Laplaciano della ROI: valore basso = sfocata.
 
-    Usata per scartare ROI mosse o con occlusioni. Indicativamente:
-    < 50 molto sfocata, 50-150 mediocre, > 150 buona.
+    Misurata su ROI gia ridimensionate a 128x256. Soglia operativa
+    SHARPNESS_THRESHOLD=15 da config (calibrata sul subset MEVID):
+    taglia solo frame degeneri o quasi uniformi; il filtro resta
+    volutamente permissivo per non perdere recall.
     """
     import cv2
 

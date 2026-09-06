@@ -81,3 +81,9 @@ DEFAULT_REID_WEIGHTS = PROJECT_ROOT / "models" / "CAL_best_model.pth.tar"
 # --- Seed ---
 
 DEFAULT_SEED = 67
+
+# --- Clustering gerarchico (Modulo 3) ---
+
+# Penalità cannot-link: supera il massimo teorico 2.0 della distanza coseno,
+# così due tracklet simultanee dello stesso video non finiscono mai insieme.
+CANNOT_LINK_PENALTY = 10.0

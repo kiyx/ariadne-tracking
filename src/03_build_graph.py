@@ -29,7 +29,7 @@ import torch
 import torch.nn.functional as F  # noqa: N812
 from scipy.cluster.hierarchy import fcluster, linkage
 
-from src.config import PROJECT_ROOT
+from src.config import CANNOT_LINK_PENALTY, PROJECT_ROOT
 from src.utils import (
     get_video_absolute_start,
     load_all_embeddings,
@@ -285,7 +285,7 @@ def build_global_graph(
 
     # 3b. Cannot-link: tracklet dello stesso video con overlap temporale non possono
     # essere la stessa persona.
-    cannot_link_penalty = 10.0
+    cannot_link_penalty = CANNOT_LINK_PENALTY
     for i in range(n):
         for j in range(i + 1, n):
             if nodes[i]["video"] == nodes[j]["video"]:
