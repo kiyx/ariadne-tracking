@@ -121,6 +121,64 @@ def render_heatmap(gq: GraphQueries, use_avg_gap: bool = False) -> Figure:
     return fig
 
 
+def render_sankey(gq: GraphQueries, top_k: int | None = None) -> Figure:
+    """Sankey dei flussi camera→camera (spessore = n. transizioni)."""
+    matrix = gq.get_transition_matrix()
+    cams: list[str] = matrix["cameras"]  # type: ignore
+    counts: dict[str, dict[str, int]] = matrix["counts"]  # type: ignore
+    avg_gaps: dict[str, dict[str, float | None]] = matrix["avg_gaps"]  # type: ignore
+    if not cams:
+        return go.Figure()
+
+    pairs = [
+        (src, dst, counts[src][dst], avg_gaps[src][dst])
+        for src in cams
+        for dst in cams
+        if counts[src][dst] > 0
+    ]
+    pairs.sort(key=lambda p: p[2], reverse=True)
+    if top_k is not None:
+        pairs = pairs[:top_k]
+    if not pairs:
+        return go.Figure()
+
+    idx = {c: i for i, c in enumerate(cams)}
+    colors = [_CAM_PALETTE[i % len(_CAM_PALETTE)] for i in range(len(cams))]
+    fig = go.Figure(
+        data=go.Sankey(
+            node={
+                "label": cams,
+                "color": colors,
+                "line": {"color": _BORDER, "width": 1},
+            },
+            link={
+                "source": [idx[s] for s, _, _, _ in pairs],
+                "target": [idx[d] for _, d, _, _ in pairs],
+                "value": [c for _, _, c, _ in pairs],
+                "customdata": [g if g is not None else "—" for _, _, _, g in pairs],
+                "color": ["rgba(20,184,166,0.25)"] * len(pairs),
+                "hovertemplate": (
+                    "%{source.label} → %{target.label}<br>"
+                    "Transizioni: %{value}<br>Gap medio: %{customdata}s<extra></extra>"
+                ),
+            },
+        )
+    )
+    fig.update_layout(
+        title={
+            "text": "<b>Flussi</b>  <span style='color:#94a3b8;font-size:13px'>transizioni camera→camera</span>",
+            "font": {"size": 16, "color": _TEXT_MAIN},
+            "x": 0.5,
+        },
+        height=520,
+        plot_bgcolor=_BG_DARK,
+        paper_bgcolor=_BG_DARK,
+        font={"color": _TEXT_MAIN, "family": "Segoe UI, system-ui, sans-serif"},
+        margin={"t": 70, "b": 30, "l": 30, "r": 30},
+    )
+    return fig
+
+
 # --- Grafo interattivo pyvis ---
 
 
@@ -278,9 +336,30 @@ def render_camera_graph(
         edge["arrows"] = {"to": {"enabled": True, "scaleFactor": 0.8}}
         edge["smooth"] = {"type": "dynamic", "roundness": 0.3}
 
+    # Evidenzia gli archi che fanno parte di un percorso richiesto
+    if highlight_path:
+        path_pairs = {
+            (highlight_path[i], highlight_path[i + 1])
+            for i in range(len(highlight_path) - 1)
+        }
+        nid_to_cam = {n["id"]: n["camera_id"] for n in gq.nodes} if group_by_date else {}
+        for edge in net.edges:
+            src = edge["from"]
+            dst = edge["to"]
+            src_cam = nid_to_cam.get(src, src)
+            dst_cam = nid_to_cam.get(dst, dst)
+            if (src_cam, dst_cam) in path_pairs:
+                edge["color"] = {
+                    "color": _ACCENT_WARN,
+                    "highlight": _ACCENT_WARN,
+                    "hover": _ACCENT_LIGHT,
+                }
+                edge["width"] = max(edge.get("width", 1), 4)
+
     net.set_options(
         json.dumps(
             {
+                "layout": {"randomSeed": 7, "improvedLayout": True},
                 "physics": {
                     "enabled": physics,
                     "forceAtlas2Based": {
@@ -567,3 +646,78 @@ def export_figure(
 def export_graph_html(html: str, path: Path) -> None:
     """Salva HTML del grafo pyvis su file."""
     path.write_text(html, encoding="utf-8")
+
+
+# --- Stile tesi (export chiaro per stampa) ---
+
+_THESIS_FONT = {"family": "Inter, sans-serif", "size": 14, "color": "#0f172a"}
+
+
+def apply_thesis_style(fig: Figure) -> Figure:
+    """Copia chiara di una figura Plotly: fondo bianco, testi scuri e leggibili."""
+    thesis_fig = go.Figure(fig)
+    thesis_fig.update_layout(
+        template="plotly_white",
+        font=dict(_THESIS_FONT),
+        paper_bgcolor="white",
+        plot_bgcolor="white",
+    )
+    return thesis_fig
+
+
+def export_thesis_figure(
+    fig: Figure, path: Path, width: int = 1400, height: int = 800, scale: int = 2
+) -> None:
+    """Esporta figura Plotly in versione tesi (richiede kaleido)."""
+    export_figure(apply_thesis_style(fig), path, width=width, height=height, scale=scale)
+
+
+def export_identity_strip(
+    gq: GraphQueries,
+    identity_id: str,
+    roi_dir: Path,
+    out_path: Path,
+    thumb_height: int = 256,
+    max_sightings: int = 12,
+) -> Path | None:
+    """Striscia PNG con un crop per avvistamento + label camera/ora.
+
+    Ritorna `out_path` o None se nessuna ROI trovata.
+    """
+    from PIL import Image, ImageDraw
+
+    members = gq.query_by_identity(identity_id)
+    if not members:
+        return None
+
+    thumbs: list[tuple] = []
+    for m in members[:max_sightings]:
+        track_dir = roi_dir / m["video"] / f"Track_{m['track_id']:04d}"
+        if not track_dir.exists():
+            continue
+        jpgs = sorted(track_dir.glob("*.jpg"))
+        if not jpgs:
+            continue
+        img = Image.open(jpgs[len(jpgs) // 2]).convert("RGB")
+        w = max(1, int(img.width * thumb_height / img.height))
+        thumbs.append((img.resize((w, thumb_height), Image.LANCZOS), m))
+
+    if not thumbs:
+        return None
+
+    label_h, gap = 24, 6
+    strip = Image.new(
+        "RGB",
+        (sum(t.width for t, _ in thumbs) + gap * (len(thumbs) - 1), thumb_height + label_h),
+        "white",
+    )
+    draw = ImageDraw.Draw(strip)
+    x = 0
+    for img, m in thumbs:
+        strip.paste(img, (x, 0))
+        ts = datetime.fromtimestamp(m["time"]).strftime("%H:%M:%S")
+        draw.text((x + 4, thumb_height + 4), f"{m['camera_id']} {ts}", fill="black")
+        x += img.width + gap
+
+    strip.save(out_path)
+    return out_path

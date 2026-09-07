@@ -21,10 +21,14 @@ import streamlit as st
 from src.config import PROJECT_ROOT
 from src.dashboard_viz import (
     export_figure,
+    export_graph_html,
+    export_identity_strip,
+    export_thesis_figure,
     render_camera_activity,
     render_camera_graph,
     render_heatmap,
     render_identity_distribution,
+    render_sankey,
     render_timeline,
 )
 from src.graph_queries import GraphQueries
@@ -202,7 +206,7 @@ def _roi_gallery(video: str, track_id: int, max_preview: int = 6) -> None:
     cols = st.columns(len(preview))
     for idx, p in enumerate(preview):
         with cols[idx]:
-            st.image(str(p), use_container_width=True)
+            st.image(str(p), width=150)
 
     if len(paths) > max_preview:
         with st.expander(f"📁 Espandi tutti i {len(paths)} frame"):
@@ -212,38 +216,50 @@ def _roi_gallery(video: str, track_id: int, max_preview: int = 6) -> None:
                 st.image([str(p) for p in batch_paths], width=110)
 
 
-def _roi_sequence(members: list[dict]) -> None:
-    """Mostra ROI in sequenza orizzontale con frecce e gap temporali."""
+def _roi_sequence(members: list[dict], per_page: int = 6, label: str = "Avvistamenti") -> None:
+    """Mostra ROI in sequenza orizzontale con frecce e gap temporali.
+
+    Oltre `per_page` avvistamenti, il resto va in sezioni espandibili.
+    """
     if not members:
         st.info("Nessuna ROI disponibile.")
         return
 
-    n = len(members)
-    # Layout alternato: [ROI][freccia][ROI]... con colonne di larghezza diversa
-    ratios = [1] + [0.4, 1] * (n - 1)
-    cols = st.columns(ratios)
-    idx = 0
+    def _show_chunk(chunk: list[dict]) -> None:
+        n = len(chunk)
+        # Layout alternato: [ROI][freccia][ROI]... con colonne di larghezza diversa
+        ratios = [1] + [0.4, 1] * (n - 1)
+        cols = st.columns(ratios)
+        idx = 0
 
-    for i, m in enumerate(members):
-        ts = datetime.fromtimestamp(m["time"]).strftime("%H:%M:%S")
-        date = datetime.fromtimestamp(m["time"]).strftime("%Y-%m-%d")
+        for i, m in enumerate(chunk):
+            ts = datetime.fromtimestamp(m["time"]).strftime("%H:%M:%S")
+            date = datetime.fromtimestamp(m["time"]).strftime("%Y-%m-%d")
 
-        with cols[idx]:
-            st.markdown(f"**{m['camera_id']}** | `{date} {ts}`")
-            _roi_gallery(m["video"], m["track_id"], max_preview=4)
-        idx += 1
-
-        if i < n - 1:
-            gap = members[i + 1]["time"] - m["time"]
             with cols[idx]:
-                st.markdown(
-                    f"<div class='arrow-transition'>"
-                    f"<span>➡️</span><br>"
-                    f"<span class='gap-label'>{gap:.0f}s</span>"
-                    f"</div>",
-                    unsafe_allow_html=True,
-                )
+                st.markdown(f"**{m['camera_id']}** | `{date} {ts}`")
+                _roi_gallery(m["video"], m["track_id"], max_preview=4)
             idx += 1
+
+            if i < n - 1:
+                gap = chunk[i + 1]["time"] - m["time"]
+                with cols[idx]:
+                    st.markdown(
+                        f"<div class='arrow-transition'>"
+                        f"<span>➡️</span><br>"
+                        f"<span class='gap-label'>{gap:.0f}s</span>"
+                        f"</div>",
+                        unsafe_allow_html=True,
+                    )
+                idx += 1
+
+    chunks = [members[i : i + per_page] for i in range(0, len(members), per_page)]
+    _show_chunk(chunks[0])
+    for k, chunk in enumerate(chunks[1:], start=1):
+        start_n = k * per_page + 1
+        end_n = min((k + 1) * per_page, len(members))
+        with st.expander(f"{label} {start_n}–{end_n} di {len(members)}"):
+            _show_chunk(chunk)
 
     st.markdown(
         "<div class='info-box'>"
@@ -290,6 +306,8 @@ all_ids = sorted(graph_queries.identities.keys())
 
 if "sb_identity" not in st.session_state:
     st.session_state["sb_identity"] = "Tutte"
+if "highlight_path" not in st.session_state:
+    st.session_state["highlight_path"] = None
 
 selected_identity = st.sidebar.selectbox(
     "🎯 Seleziona persona",
@@ -298,6 +316,7 @@ selected_identity = st.sidebar.selectbox(
     help="L'identità viene evidenziata in Grafo, Timeline e ROI",
 )
 highlight_id = None if selected_identity == "Tutte" else selected_identity
+highlight_path = st.session_state.get("highlight_path")
 
 st.sidebar.markdown("---")
 
@@ -343,7 +362,9 @@ st.markdown(
 
 st.markdown("---")
 
-tab_overview, tab_stats, tab_query = st.tabs(["📋 Overview", "📊 Statistiche", "🔍 Query"])
+tab_overview, tab_stats, tab_query, tab_compare = st.tabs(
+    ["📋 Overview", "📊 Statistiche", "🔍 Query", "🆚 Confronto"]
+)
 
 # --- Tab Overview ---
 
@@ -357,6 +378,17 @@ with tab_overview:
         value=False,
         help="Ogni telecamera è divisa per giornata (utile per verificare cross-day).",
     )
+
+    if highlight_path:
+        st.markdown(
+            f"<div class='info-box'>"
+            f"🎯 Percorso evidenziato: <b>{' → '.join(highlight_path)}</b>"
+            f"</div>",
+            unsafe_allow_html=True,
+        )
+        if st.button("❌ Rimuovi evidenziazione percorso", key="reset_path"):
+            st.session_state["highlight_path"] = None
+            st.rerun()
 
     if group_by_date:
         st.markdown(
@@ -378,11 +410,16 @@ with tab_overview:
     html_graph = render_camera_graph(
         graph_queries,
         highlight_identity=highlight_id,
+        highlight_path=highlight_path,
         min_edge_weight=1,
         physics=True,
         group_by_date=group_by_date,
     )
     st.components.v1.html(html_graph, height=550)
+    if st.button("📷 Esporta grafo HTML", key="exp_graph"):
+        out = OUTPUT_DIR / "camera_graph.html"
+        export_graph_html(html_graph, out)
+        st.success(f"Salvato: {out}")
 
     st.markdown("---")
     st.markdown("<div class='section-title'>🕒 Timeline</div>", unsafe_allow_html=True)
@@ -397,6 +434,10 @@ with tab_overview:
         graph_queries, highlight_identity=highlight_id, group_by_date=group_by_date
     )
     st.plotly_chart(fig_tl, use_container_width=True)
+    if st.button("📷 Esporta timeline (tesi)", key="exp_tl"):
+        out = OUTPUT_DIR / "timeline_thesis.png"
+        export_thesis_figure(fig_tl, out, width=1400, height=700)
+        st.success(f"Salvata: {out}")
 
     st.markdown("---")
     st.markdown("<div class='section-title'>👤 Sequenza ROI</div>", unsafe_allow_html=True)
@@ -409,7 +450,13 @@ with tab_overview:
 
     if highlight_id:
         members = graph_queries.query_by_identity(highlight_id)
-        _roi_sequence(members)
+        _roi_sequence(members, label=f"Panoramica {highlight_id}")
+        if st.button("📷 Esporta strip ROI (tesi)", key="exp_roi_over"):
+            out = OUTPUT_DIR / f"roi_{highlight_id}.png"
+            if export_identity_strip(graph_queries, highlight_id, ROI_DIR, out):
+                st.success(f"Salvata: {out}")
+            else:
+                st.warning("Nessuna ROI trovata.")
     else:
         st.info("Seleziona un'identità dalla sidebar per visualizzare la sequenza delle ROI.")
 
@@ -458,6 +505,15 @@ with tab_stats:
         st.plotly_chart(
             render_heatmap(graph_queries, use_avg_gap=use_gap), use_container_width=True
         )
+
+    st.markdown("---")
+    st.markdown("<div class='section-title'>🌊 Flussi tra Camere</div>", unsafe_allow_html=True)
+    fig_sk = render_sankey(graph_queries)
+    st.plotly_chart(fig_sk, use_container_width=True)
+    if st.button("📷 Esporta Sankey (tesi)", key="exp_sk"):
+        out = OUTPUT_DIR / "sankey_thesis.png"
+        export_thesis_figure(fig_sk, out, width=1400, height=700)
+        st.success(f"Salvata: {out}")
 
     # Pie + Bar
     col_pie, col_bar = st.columns(2)
@@ -570,7 +626,7 @@ with tab_query:
                     st.info("Nessuna identità trovata.")
                 else:
                     st.success(f"Trovate **{len(results)}** identità")
-                    for r in results:
+                    for i, r in enumerate(results):
                         badges = ""
                         if r.is_cross_camera and r.is_cross_day:
                             badges = '<span class="badge badge-both">Cross-Cam + Cross-Day</span>'
@@ -586,6 +642,12 @@ with tab_query:
                             st.write(
                                 f"**Orari:** {[datetime.fromtimestamp(t).strftime('%H:%M:%S') for t in r.times]}"
                             )
+                            if st.button(
+                                "🎯 Evidenzia nel grafo", key=f"hl_path_{i}"
+                            ):
+                                st.session_state["highlight_path"] = r.camera_sequence
+                                st.session_state["sb_identity"] = "Tutte"
+                                st.rerun()
                             st.markdown(
                                 "<div class='info-box'>"
                                 "ℹ️ <b>Gap</b> = tempo tra avvistamenti consecutivi. "
@@ -595,7 +657,7 @@ with tab_query:
                             )
                             members = graph_queries.query_by_identity(r.identity_id)
                             st.markdown("**👤 ROI:**")
-                            _roi_sequence(members)
+                            _roi_sequence(members, label=f"Percorso {r.identity_id}")
 
     # Query per identità
     with q2:
@@ -630,11 +692,105 @@ with tab_query:
                     st.markdown(f"- `{ts}` | **{m['camera_id']}** | Track {m['track_id']}")
 
                 st.markdown("**👤 ROI:**")
-                _roi_sequence(members)
+                _roi_sequence(members, label=f"Identità {sel_id}")
+                if st.button("📷 Esporta strip ROI (tesi)", key="exp_roi_id"):
+                    out = OUTPUT_DIR / f"roi_{sel_id}.png"
+                    if export_identity_strip(graph_queries, sel_id, ROI_DIR, out):
+                        st.success(f"Salvata: {out}")
+                    else:
+                        st.warning("Nessuna ROI trovata.")
 
                 if st.button("🎯 Evidenzia in Overview", key="btn_hl"):
                     st.session_state["sb_identity"] = sel_id
                     st.rerun()
+
+# --- Tab Confronto ---
+
+with tab_compare:
+    st.markdown(
+        "<div class='section-title'>🆚 Confronto tra due run</div>",
+        unsafe_allow_html=True,
+    )
+    st.markdown(
+        "<div class='section-caption'>"
+        "Seleziona due grafi generati con parametri diversi per confrontarne le statistiche."
+        "</div>",
+        unsafe_allow_html=True,
+    )
+
+    graph_files = sorted(OUTPUT_DIR.glob("global_graph*.json"))
+    if len(graph_files) < 2:
+        st.info("Servono almeno due file global_graph*.json in output/ per il confronto.")
+    else:
+        col_a, col_b = st.columns(2)
+        with col_a:
+            file_a = st.selectbox(
+                "Run A",
+                graph_files,
+                format_func=lambda p: p.name,
+                key="cmp_file_a",
+            )
+        with col_b:
+            file_b = st.selectbox(
+                "Run B",
+                [f for f in graph_files if f != file_a],
+                format_func=lambda p: p.name,
+                key="cmp_file_b",
+            )
+
+        if file_a and file_b:
+            gq_a = GraphQueries(file_a)
+            gq_b = GraphQueries(file_b)
+            m_a = gq_a.get_global_metrics()
+            m_b = gq_b.get_global_metrics()
+
+            st.markdown("##### Metriche globali")
+            metric_cols = [
+                ("Identità", "num_identities"),
+                ("Tracklet", "num_tracklets"),
+                ("Archi", "num_edges"),
+                ("Nodi", "num_nodes"),
+                ("Cross-camera", "cross_camera_identities"),
+                ("Cross-day", "cross_day_identities"),
+            ]
+            cols = st.columns(len(metric_cols))
+            for col, (label, key) in zip(cols, metric_cols):
+                va = m_a.get(key, 0)
+                vb = m_b.get(key, 0)
+                col.metric(label, vb, f"{vb - va:+,}", delta_color="off")
+
+            st.markdown("##### Top percorsi")
+            top_a = gq_a.get_path_statistics(top_k=10)
+            top_b = gq_b.get_path_statistics(top_k=10)
+            ca, cb = st.columns(2)
+            with ca:
+                st.caption(f"**{file_a.name}**")
+                if top_a:
+                    st.dataframe(
+                        pd.DataFrame(top_a),
+                        column_config={
+                            "path": st.column_config.TextColumn("Percorso", width="large"),
+                            "count": st.column_config.NumberColumn("Occ."),
+                            "num_cameras": st.column_config.NumberColumn("Cam"),
+                        },
+                        hide_index=True,
+                    )
+                else:
+                    st.info("Nessun percorso multi-camera.")
+            with cb:
+                st.caption(f"**{file_b.name}**")
+                if top_b:
+                    st.dataframe(
+                        pd.DataFrame(top_b),
+                        column_config={
+                            "path": st.column_config.TextColumn("Percorso", width="large"),
+                            "count": st.column_config.NumberColumn("Occ."),
+                            "num_cameras": st.column_config.NumberColumn("Cam"),
+                        },
+                        hide_index=True,
+                    )
+                else:
+                    st.info("Nessun percorso multi-camera.")
 
 st.markdown("---")
 st.caption("Ariadne v3.0 — Cross-camera Person Re-identification")

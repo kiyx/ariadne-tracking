@@ -397,6 +397,7 @@ class GraphQueries:
         return {
             "num_nodes": len(self.nodes),
             "num_identities": len(self.identities),
+            "num_tracklets": sum(len(n.get("tracklets", [])) for n in self.nodes),
             "num_edges": len(self.edges),
             "threshold": self.threshold,
             "max_time_gap_sec": self.max_time_gap_sec,
