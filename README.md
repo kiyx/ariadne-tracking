@@ -1,10 +1,12 @@
 <div align="center">
 
+**English** | [Italiano](README.it.md)
+
 # Ariadne Tracking
 
-**Dalla re-identificazione alla rappresentazione a grafo: modellazione dei percorsi umani in scenari multi-camera.**
+**From re-identification to graph representation: modeling human trajectories in multi-camera scenarios.**
 
-Pipeline modulare per il tracking multi-camera di persone e la costruzione di un grafo di movimento globale, robusta ai cambi d'abito e alle discontinuità temporali.
+A modular pipeline for multi-camera person tracking and global movement graph construction, robust to clothing changes and temporal discontinuities.
 
 [![CI](https://github.com/kiyx/ariadne-tracking/actions/workflows/ci.yml/badge.svg)](https://github.com/kiyx/ariadne-tracking/actions/workflows/ci.yml)
 [![Python](https://img.shields.io/badge/Python-3.10%2B-3776AB?logo=python&logoColor=white)](https://www.python.org/)
@@ -16,78 +18,78 @@ Pipeline modulare per il tracking multi-camera di persone e la costruzione di un
 
 ---
 
-## Panoramica
+## Overview
 
-**Ariadne Tracking** elabora video di sorveglianza provenienti da più telecamere e ricostruisce il percorso delle persone nello spazio e nel tempo. La pipeline:
+**Ariadne Tracking** processes surveillance videos from multiple cameras and reconstructs people's trajectories across space and time. The pipeline:
 
-1. **Rileva e traccia** le persone in ogni video (YOLO26 + BoT-SORT), estraendo ROI pulite per ogni tracklet;
-2. **Estrae embedding Re-ID** robusti ai cambi d'abito con un modello *Clothes-Agnostic* (C2DResNet50 + CAL);
-3. **Costruisce un grafo di movimento globale** che collega le tracklet della stessa identità anche tra telecamere e giorni diversi;
-4. **Visualizza i percorsi** in una dashboard interattiva con grafi, timeline, heatmap e query.
+1. **Detects and tracks** people in each video (YOLO26 + BoT-SORT), extracting clean ROIs for every tracklet;
+2. **Extracts Re-ID embeddings** robust to clothing changes with a *Clothes-Agnostic* model (C2DResNet50 + CAL);
+3. **Builds a global movement graph** that links tracklets of the same identity across cameras and even different days;
+4. **Visualizes trajectories** in an interactive dashboard with graphs, timelines, heatmaps and queries.
 
-A differenza di un semplice modulo di tracking, il progetto modella l'intero flusso *detection → identità → movimento*, ed è pensato per essere **scene-agnostic**: ogni coppia camera/giorno è un nodo distinto del grafo, così le identità non vengono mai confuse tra contesti diversi.
+Unlike a plain tracking module, the project models the whole *detection → identity → movement* flow and is designed to be **scene-agnostic**: each camera/day pair is a distinct graph node, so identities are never confused across different contexts.
 
-> **Tesi di Laurea Triennale in Informatica** — Università degli Studi di Napoli Federico II
+> **Bachelor's Degree Thesis in Computer Science** — University of Naples Federico II
 >
 > | | |
 > | :--- | :--- |
-> | **Autore** | Giuseppe Paolo Esposito |
-> | **Relatore** | Prof. Daniel Riccio |
-> | **Anno Accademico** | 2025/2026 |
+> | **Author** | Giuseppe Paolo Esposito |
+> | **Supervisor** | Prof. Daniel Riccio |
+> | **Academic Year** | 2025/2026 |
 
 ---
 
 ## Pipeline
 
 ```text
-                    Modulo 0                    Modulo 1
+                    Module 0                    Module 1
                ┌──────────────┐    ┌───────────────────────────┐
- Video MEVID ──┤  S3 Download ├───►│ YOLO26mpose + BoT-SORT    │
+ MEVID video ──┤  S3 Download ├───►│ YOLO26mpose + BoT-SORT    │
                └──────────────┘    │ Detection → Tracking → ROI│
                                    └─────────────┬─────────────┘
                                                  │
-                    Modulo 2                     ▼
+                    Module 2                     ▼
                ┌──────────────────────────────────────┐
-               │ C2DResNet50 + CAL → Embedding 2048-D │
+               │ C2DResNet50 + CAL → 2048-D Embedding │
                └──────────────┬───────────────────────┘
                               │
-                    Modulo 3  ▼
+                    Module 3  ▼
                ┌──────────────────────────────────────┐
-               │ Grafo di Movimento Globale (JSON)    │
+               │ Global Movement Graph (JSON)         │
                └──────────────┬───────────────────────┘
                               │
-                    Modulo 4  ▼
+                    Module 4  ▼
                ┌──────────────────────────────────────┐
-               │ Dashboard Streamlit + PyVis/Plotly   │
+               │ Streamlit Dashboard + PyVis/Plotly   │
                └──────────────────────────────────────┘
 ```
 
-| Modulo | File | Responsabilità |
+| Module | File | Responsibility |
 | :--- | :--- | :--- |
-| 0 — Dataset | `src/00_setup_dataset.py` | Download dei video MEVID da S3 (full o subset) |
-| 1 — Tracking | `src/01_tracker_extractor.py` | Detection, tracking e filtri di qualità (pose, sfocatura, sovrapposizioni) → ROI |
-| 2 — Re-ID | `src/02_feature_extractor.py` | Estrazione embedding 2048-D con C2DResNet50 + CAL |
-| 3 — Grafo | `src/03_build_graph.py` | Clustering gerarchico a 3 fasi (intra-camera, cross-camera, cross-day) → grafo JSON |
-| 4 — Visualizzazione | `src/04_visualize_graph.py` | Dashboard interattiva per esplorare grafi, statistiche e percorsi |
+| 0 — Dataset | `src/00_setup_dataset.py` | MEVID video download from S3 (full or subset) |
+| 1 — Tracking | `src/01_tracker_extractor.py` | Detection, tracking and quality filters (pose, blur, overlaps) → ROIs |
+| 2 — Re-ID | `src/02_feature_extractor.py` | 2048-D embedding extraction with C2DResNet50 + CAL |
+| 3 — Graph | `src/03_build_graph.py` | 3-phase hierarchical clustering (intra-camera, cross-camera, cross-day) → JSON graph |
+| 4 — Visualization | `src/04_visualize_graph.py` | Interactive dashboard to explore graphs, statistics and trajectories |
 
 ---
 
-## Caratteristiche principali
+## Key Features
 
-- **Tracking multi-camera** con BoT-SORT e detection pose-guided, con filtri geometrici e di qualità per eliminare detection parziali o sfocate.
-- **Re-Identification clothes-agnostic**: embedding basati su modello CAL, addestrato a ignorare l'abbigliamento — pensato per sorveglianza reale su più giorni.
-- **Grafo di movimento globale** costruito con clustering gerarchico a soglie decrescenti: alta confidenza nello stesso contesto, più permissiva tra giorni diversi.
-- **Dashboard interattiva** con grafo PyVis, timeline, heatmap, Sankey e query per identità o percorso camera.
-- **Benchmark ufficiale MEVID** con protocollo standard (CMC + mAP).
-- **Qualità del codice**: linting e formattazione con Ruff, type checking e test automatici in CI su ogni push/PR.
+- **Multi-camera tracking** with BoT-SORT and pose-guided detection, plus geometric and quality filters to drop partial or blurry detections.
+- **Clothes-agnostic Re-Identification**: embeddings from the CAL model, trained to ignore clothing — designed for real-world multi-day surveillance.
+- **Global movement graph** built with hierarchical clustering at decreasing thresholds: high confidence within the same context, more permissive across days.
+- **Interactive dashboard** with PyVis graph, timeline, heatmap, Sankey and queries by identity or camera path.
+- **Official MEVID benchmark** with the standard protocol (CMC + mAP).
+- **Code quality**: linting and formatting with Ruff, type checking and automated tests in CI on every push/PR.
 
 ---
 
-## Risultati
+## Results
 
-Valutazione sul benchmark **MEVID** (Multi-view Extended Videos with Identities, WACV 2023), split di test ufficiale (54 identità, 1 754 tracklet, 316 query):
+Evaluation on the **MEVID** benchmark (Multi-view Extended Videos with Identities, WACV 2023), official test split (54 identities, 1,754 tracklets, 316 queries):
 
-| Metrica | Valore |
+| Metric | Value |
 | :--- | ---: |
 | Rank-1 | **52.53%** |
 | Rank-5 | 66.77% |
@@ -97,73 +99,73 @@ Valutazione sul benchmark **MEVID** (Multi-view Extended Videos with Identities,
 
 ---
 
-## Stack tecnologico
+## Tech Stack
 
-| Ambito | Tecnologie |
+| Area | Technologies |
 | :--- | :--- |
 | Detection | YOLO26m-pose (Ultralytics) |
 | Tracking | BoT-SORT |
 | Re-Identification | C2DResNet50 + CAL (Clothes-Agnostic Learning), PyTorch / TorchVision |
-| Clustering | Clustering agglomerativo gerarchico (SciPy) |
-| Accelerazione | CUDA, TensorRT FP16 |
-| Visualizzazione | Streamlit, PyVis, Plotly, NetworkX, Pandas |
-| Qualità | Ruff, mypy, Pyright, pytest, GitHub Actions |
+| Clustering | Agglomerative hierarchical clustering (SciPy) |
+| Acceleration | CUDA, TensorRT FP16 |
+| Visualization | Streamlit, PyVis, Plotly, NetworkX, Pandas |
+| Quality | Ruff, mypy, Pyright, pytest, GitHub Actions |
 
 ---
 
 ## Quick Start
 
-**Requisiti:** Python ≥ 3.10, GPU NVIDIA con CUDA ≥ 12.x (testato su RTX 3060 6 GB), Conda.
+**Requirements:** Python ≥ 3.10, NVIDIA GPU with CUDA ≥ 12.x (tested on RTX 3060 6 GB), Conda.
 
 ```bash
-# 1. Clona il repository
+# 1. Clone the repository
 git clone https://github.com/kiyx/ariadne-tracking.git
 cd ariadne-tracking
 
-# 2. Crea l'ambiente
+# 2. Create the environment
 conda create -n ariadne_env python=3.10 -y
 conda activate ariadne_env
 
-# 3. PyTorch con CUDA + dipendenze
+# 3. PyTorch with CUDA + dependencies
 pip install torch torchvision --index-url https://download.pytorch.org/whl/cu126
 pip install -r requirements.txt
 
-# 4. (Opzionale) Dashboard e tool di sviluppo
+# 4. (Optional) Dashboard and development tools
 pip install -e ".[viz,dev]"
 ```
 
-**Esegui la pipeline completa:**
+**Run the full pipeline:**
 
 ```bash
-python -m src.00_setup_dataset --subset   # download subset MEVID (~390 MB)
-python -m src.01_tracker_extractor        # detection + tracking → ROI
-python -m src.02_feature_extractor        # embedding Re-ID 2048-D
-python -m src.03_build_graph              # grafo cross-camera → output/global_graph.json
+python -m src.00_setup_dataset --subset   # download MEVID subset (~390 MB)
+python -m src.01_tracker_extractor        # detection + tracking → ROIs
+python -m src.02_feature_extractor        # Re-ID embeddings 2048-D
+python -m src.03_build_graph              # cross-camera graph → output/global_graph.json
 streamlit run src/04_visualize_graph.py   # dashboard → http://localhost:8501
 ```
 
-Ogni modulo espone opzioni CLI (soglie di similarità, batch size, TensorRT, limiti sui video, ecc.) documentate in `--help`. I parametri di default sono centralizzati in [`src/config.py`](src/config.py).
+Each module exposes CLI options (similarity thresholds, batch size, TensorRT, video limits, etc.) documented in `--help`. Default parameters are centralized in [`src/config.py`](src/config.py).
 
 ---
 
-## Struttura del progetto
+## Project Structure
 
 ```text
 ariadne-tracking/
 ├── src/
-│   ├── 00_setup_dataset.py      # Download video MEVID da S3
+│   ├── 00_setup_dataset.py      # MEVID video download from S3
 │   ├── 01_tracker_extractor.py  # Detection + tracking → ROI extraction
-│   ├── 02_feature_extractor.py  # C2DResNet50 + CAL → embedding 2048-D
-│   ├── 03_build_graph.py        # Clustering gerarchico 3-fasi → grafo JSON
-│   ├── 04_visualize_graph.py    # Dashboard interattiva (Streamlit)
-│   ├── dashboard_viz.py         # Visualizzazioni Plotly/PyVis
-│   ├── graph_queries.py         # Query e statistiche sui grafi
-│   ├── eval_mevid.py            # Benchmark MEVID ufficiale (CMC + mAP)
-│   └── config.py                # Costanti e parametri centralizzati
-├── models/                      # Pesi YOLO e CAL + sorgente Simple-CCReID
-├── data/                        # Video grezzi, ROI estratte, annotazioni MEVID
-├── output/                      # Grafi, report e log
-├── tests/                       # Test suite pytest
+│   ├── 02_feature_extractor.py  # C2DResNet50 + CAL → 2048-D embedding
+│   ├── 03_build_graph.py        # 3-phase hierarchical clustering → JSON graph
+│   ├── 04_visualize_graph.py    # Interactive dashboard (Streamlit)
+│   ├── dashboard_viz.py         # Plotly/PyVis visualizations
+│   ├── graph_queries.py         # Graph queries and statistics
+│   ├── eval_mevid.py            # Official MEVID benchmark (CMC + mAP)
+│   └── config.py                # Centralized constants and parameters
+├── models/                      # YOLO and CAL weights + Simple-CCReID source
+├── data/                        # Raw videos, extracted ROIs, MEVID annotations
+├── output/                      # Graphs, reports and logs
+├── tests/                       # pytest test suite
 └── .github/workflows/           # CI: lint + type check + test
 ```
 
@@ -171,23 +173,23 @@ ariadne-tracking/
 
 ## Dataset
 
-**MEVID** (Multi-view Extended Videos with Identities) è un dataset multi-camera di sorveglianza su più giorni, con **158 identità**, **598 outfit**, **8 092 tracklet** e **33 telecamere**. Il progetto include il download automatico dei video e uno script di valutazione che riproduce il protocollo ufficiale del benchmark.
+**MEVID** (Multi-view Extended Videos with Identities) is a multi-day, multi-camera surveillance dataset with **158 identities**, **598 outfits**, **8,092 tracklets** and **33 cameras**. The project includes automatic video download and an evaluation script that reproduces the official benchmark protocol.
 
 ---
 
-## Sviluppo e qualità
+## Development and Quality
 
 ```bash
 ruff check .        # linting
-ruff format .       # formattazione
+ruff format .       # formatting
 mypy src/           # type checking
 pytest              # test suite
 ```
 
-La CI (GitHub Actions) esegue automaticamente lint, format check, type checking e test a ogni push e pull request sul branch `main`.
+The CI (GitHub Actions) automatically runs linting, format check, type checking and tests on every push and pull request to the `main` branch.
 
 ---
 
-## Licenza
+## License
 
-Progetto di tesi — Università degli Studi di Napoli Federico II.
+Thesis project — University of Naples Federico II.
