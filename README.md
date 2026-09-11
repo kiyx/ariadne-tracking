@@ -4,7 +4,7 @@
 
 # Ariadne Tracking
 
-**From re-identification to graph representation: modeling human trajectories in multi-camera scenarios.**
+**From Person Re-Identification to Graph Representation: Modeling Human Paths in Multi-Camera Scenarios.**
 
 A modular pipeline for multi-camera person tracking and global movement graph construction, robust to clothing changes and temporal discontinuities.
 
