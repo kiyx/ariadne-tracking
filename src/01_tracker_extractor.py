@@ -401,7 +401,6 @@ def process_single_video(
         for frame_result in tracking_results:
             frame = frame_result.orig_img
 
-            # Se non c'è nessun ID tracciato, salta il frame
             if frame_result.boxes.id is not None:
                 boxes = frame_result.boxes.xyxy.cpu().numpy()
                 tids = frame_result.boxes.id.int().cpu().numpy()
@@ -462,7 +461,6 @@ def process_single_video(
                         discard.edge_partial += 1
                         continue
 
-                    # Estrai ROI
                     extraction = _extract_roi(
                         frame,
                         orig_box,
@@ -487,7 +485,6 @@ def process_single_video(
                         (video_out_dir / track_dir_name).mkdir(parents=True, exist_ok=True)
                         created_tracks.add(tid)
 
-                    # Salva JPEG
                     filename = f"frame_{frame_idx:06d}.jpg"
                     filepath = video_out_dir / track_dir_name / filename
                     if not _save_roi_jpeg(roi, filepath):
@@ -588,7 +585,7 @@ def _save_report(
     args: argparse.Namespace,
     elapsed: float,
 ) -> None:
-    """Scrive ``pipeline_report.json`` e stampa riepilogo Rich (se disponibile)."""
+    """Scrive ``pipeline_report_modulo1.json`` e stampa riepilogo Rich (se disponibile)."""
     report_path = output_dir / "pipeline_report_modulo1.json"
     report_path.write_text(
         json.dumps(

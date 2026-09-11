@@ -98,7 +98,6 @@ class VideoTrackletDataset(Dataset):
                 self.dropped_short_tracks += 1
                 continue
 
-            # Genera gli indici delle clip sovrapposte
             chunk_index_lists = recombine_tracklet_clips(
                 num_frames,
                 seq_len,
@@ -180,8 +179,8 @@ def process_video_directory(
         batch_size=batch_size,
         num_workers=workers,
         shuffle=False,
-        pin_memory=device.type == "cuda",  # velocizza trasferimento CPU→GPU
-        persistent_workers=workers > 0,  # evita di ricreare i processi ad ogni epoca
+        pin_memory=device.type == "cuda",
+        persistent_workers=workers > 0,
     )
     track_embs_accumulated = defaultdict(list)
 

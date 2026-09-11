@@ -2,7 +2,6 @@
 
 Qui ci sono solo funzioni senza side-effect: bbox, validazione ROI,
 metadati video, caricamento embedding, parsing dei nomi MEVID.
-Tutto è testabile in isolamento.
 """
 
 from __future__ import annotations
@@ -109,11 +108,8 @@ def is_edge_bbox(
     invece sono comuni e spesso comunque utili.
     """
     margin_y = int(frame_h * margin_ratio)
-    # Solo bordo inferiore: se il bottom della bbox è al bordo del frame
-    # E il top non è vicino al top del frame (→ non è una persona piena)
     at_bottom = y2 >= frame_h - margin_y
     at_top = y1 <= margin_y
-    # Se tocca il bottom MA NON il top, è probabilmente solo la parte bassa
     return at_bottom and not at_top
 
 
@@ -151,7 +147,7 @@ def suppress_contained_boxes(
 
     YOLO a volte rileva piedi o parti del corpo dentro una detection completa:
     se una bbox è contenuta per almeno ``threshold`` in una più grande, la scartiamo.
-    Vettorizzato in NumPy: N è piccolo (5-30 detection per frame), quindi O(N²) va bene.
+    Vettorizzato in NumPy; N è piccolo, quindi O(N²) è accettabile.
     """
     n = len(boxes)
     if n <= 1:
@@ -176,8 +172,8 @@ def suppress_contained_boxes(
     # Azzera diagonale (una box non sopprime sé stessa)
     np.fill_diagonal(ratio, 0.0)
 
-    # Una bbox è soppressa se è strettamente più piccola nella coppia E ratio >= threshold.
-    # Usiamo < invece di <= per evitare la soppressione reciproca quando le aree sono uguali.
+    # Sopprime la bbox più piccola della coppia: < evita la soppressione
+    # reciproca a parità di area.
     is_smaller = (
         areas[:, None] < areas[None, :]
     )  # (i, j): True se i è strettamente più piccola di j
@@ -214,8 +210,7 @@ def suppress_overlapping_boxes(
 
     np.fill_diagonal(iou, 0.0)
 
-    # La bbox strettamente più piccola nella coppia viene soppressa.
-    # Usiamo < invece di <= per evitare la soppressione reciproca quando le aree sono uguali.
+    # Tie-breaker: a parità di area nessuna delle due viene soppressa.
     is_smaller = areas[:, None] < areas[None, :]
     suppressed = np.any((iou >= threshold) & is_smaller, axis=1)
 
@@ -234,10 +229,8 @@ def get_engine_path(pt_path: str, imgsz: int) -> Path:
 def roi_sharpness(roi: np.ndarray) -> float:
     """Varianza del Laplaciano della ROI: valore basso = sfocata.
 
-    Misurata su ROI gia ridimensionate a 128x256. Soglia operativa
-    SHARPNESS_THRESHOLD=15 da config (calibrata sul subset MEVID):
-    taglia solo frame degeneri o quasi uniformi; il filtro resta
-    volutamente permissivo per non perdere recall.
+    Misurata su ROI ridimensionate a 128x256; la soglia minima è
+    SHARPNESS_THRESHOLD in config.
     """
     import cv2
 

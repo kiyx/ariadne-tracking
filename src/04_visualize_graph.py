@@ -465,7 +465,7 @@ with tab_overview:
 with tab_stats:
     st.markdown("<div class='section-title'>📊 Panoramica Statistica</div>", unsafe_allow_html=True)
 
-    # Metriche in card moderne
+    # Card metriche
     c1, c2, c3, c4, c5 = st.columns(5)
     for col, label, value in [
         (c1, "Identità", metrics["num_identities"]),
@@ -597,7 +597,6 @@ with tab_query:
 
     q1, q2 = st.columns(2)
 
-    # Query per percorso
     with q1:
         st.markdown("##### 🗺️ Cerca per Percorso")
         path_input = st.text_input(
@@ -642,9 +641,7 @@ with tab_query:
                             st.write(
                                 f"**Orari:** {[datetime.fromtimestamp(t).strftime('%H:%M:%S') for t in r.times]}"
                             )
-                            if st.button(
-                                "🎯 Evidenzia nel grafo", key=f"hl_path_{i}"
-                            ):
+                            if st.button("🎯 Evidenzia nel grafo", key=f"hl_path_{i}"):
                                 st.session_state["highlight_path"] = r.camera_sequence
                                 st.session_state["sb_identity"] = "Tutte"
                                 st.rerun()
@@ -659,7 +656,6 @@ with tab_query:
                             st.markdown("**👤 ROI:**")
                             _roi_sequence(members, label=f"Percorso {r.identity_id}")
 
-    # Query per identità
     with q2:
         st.markdown("##### 👤 Cerca per Identità")
         sel_id = st.selectbox("Seleziona identità", all_ids, index=0)
@@ -754,7 +750,7 @@ with tab_compare:
                 ("Cross-day", "cross_day_identities"),
             ]
             cols = st.columns(len(metric_cols))
-            for col, (label, key) in zip(cols, metric_cols):
+            for col, (label, key) in zip(cols, metric_cols, strict=True):
                 va = m_a.get(key, 0)
                 vb = m_b.get(key, 0)
                 col.metric(label, vb, f"{vb - va:+,}", delta_color="off")

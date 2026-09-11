@@ -20,7 +20,7 @@ MIN_HEIGHT = 75
 MAX_ASPECT_RATIO = 0.75
 MIN_ASPECT_RATIO = 0.2
 DEFAULT_CONF = 0.5
-DEFAULT_FRAME_SKIP = 3  # salva 1 frame ogni 3: buon compromesso tra spazio e tracking
+DEFAULT_FRAME_SKIP = 3  # salva 1 frame ogni 3
 DEFAULT_IMGSZ = 640
 DEFAULT_TRACKER = "botsort.yaml"
 
@@ -41,7 +41,7 @@ EDGE_MARGIN_RATIO = 0.02
 
 # --- Pose-guided filtering ---
 
-# Sotto 150 px i keypoint COCO diventano troppo instabili: usiamo solo la geometria.
+# Sotto 150 px i keypoint COCO sono troppo instabili.
 POSE_KPT_MIN_HEIGHT = 150
 POSE_KPT_CONF_THRESHOLD = 0.5
 # Upper-body COCO: nose, eyes, ears, shoulders. Se ne mancano troppi, la detection
@@ -61,8 +61,7 @@ LOG_DIR = PROJECT_ROOT / "output" / "logs"
 
 # --- Qualità ROI ---
 
-# Valore calibrato sul subset MEVID: sotto ~10 la ROI è troppo sfocata,
-# sopra ~20 è nitida. 15 bilancia qualità e recall.
+# Calibrata sul subset MEVID: sotto ~10 = sfocata, sopra ~20 = nitida.
 SHARPNESS_THRESHOLD = 15
 
 # --- Filtro track ---

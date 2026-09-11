@@ -54,8 +54,8 @@ class TestSuppressContainedBoxes:
     def test_contained_suppressed(self):
         boxes = np.array(
             [
-                [0, 0, 200, 400],  # grande
-                [50, 200, 150, 350],  # contenuta
+                [0, 0, 200, 400],
+                [50, 200, 150, 350],
             ]
         )
         mask = suppress_contained_boxes(boxes)
@@ -74,8 +74,8 @@ class TestSuppressContainedBoxes:
         """Due bbox identiche non devono sopprimersi a vicenda (tie-breaker)."""
         boxes = np.array(
             [
-                [0, 0, 100, 100],  # area=10000
-                [0, 0, 100, 100],  # area=10000 (identica)
+                [0, 0, 100, 100],
+                [0, 0, 100, 100],
             ]
         )
         mask = suppress_contained_boxes(boxes)
@@ -86,8 +86,8 @@ class TestSuppressContainedBoxes:
         """Due bbox con area uguale e sovrapposizione parziale non devono essere soppresse."""
         boxes = np.array(
             [
-                [0, 0, 100, 100],  # area=10000
-                [50, 50, 150, 150],  # area=10000
+                [0, 0, 100, 100],
+                [50, 50, 150, 150],
             ]
         )
         mask = suppress_contained_boxes(boxes)
@@ -138,8 +138,8 @@ class TestSuppressOverlappingBoxes:
     def test_overlap_suppresses_smaller(self):
         boxes = np.array(
             [
-                [0, 0, 200, 400],  # grande (area=80000)
-                [50, 50, 180, 350],  # sovrapposta (area=39000, IoU alto)
+                [0, 0, 200, 400],
+                [50, 50, 180, 350],
             ]
         )
         mask = suppress_overlapping_boxes(boxes)
@@ -166,11 +166,10 @@ class TestSuppressOverlappingBoxes:
         assert len(mask) == 0
 
     def test_equal_area_not_mutual_suppression(self):
-        """Due bbox identiche non devono sopprimersi a vicenda (tie-breaker)."""
         boxes = np.array(
             [
-                [0, 0, 100, 100],  # area=10000
-                [0, 0, 100, 100],  # area=10000 (identica)
+                [0, 0, 100, 100],
+                [0, 0, 100, 100],
             ]
         )
         mask = suppress_overlapping_boxes(boxes)
@@ -178,11 +177,10 @@ class TestSuppressOverlappingBoxes:
         assert mask[1]
 
     def test_equal_area_partial_overlap_not_suppressed(self):
-        """Due bbox con area uguale e sovrapposizione parziale non devono essere soppresse."""
         boxes = np.array(
             [
-                [0, 0, 100, 100],  # area=10000
-                [50, 50, 150, 150],  # area=10000
+                [0, 0, 100, 100],
+                [50, 50, 150, 150],
             ]
         )
         mask = suppress_overlapping_boxes(boxes)

@@ -201,7 +201,7 @@ def render_camera_graph(
     graph = nx.DiGraph()
 
     if group_by_date:
-        # ── Vista per data: nodi = camera_node_id ──
+        # Vista per data: un nodo per camera/giorno
         all_cams = sorted({n["camera_id"] for n in gq.nodes})
         cam_colors = {c: _CAM_PALETTE[i % len(_CAM_PALETTE)] for i, c in enumerate(all_cams)}
 
@@ -251,7 +251,7 @@ def render_camera_graph(
                 ),
             )
 
-        # Highlight: evidenziò tutti i nodi la cui camera è nel percorso
+        # Evidenzia i nodi la cui camera è nel percorso
         if highlight_path:
             for node in gq.nodes:
                 nid = node["id"]
@@ -264,7 +264,7 @@ def render_camera_graph(
                         "border": _ACCENT_WARN,
                     }
     else:
-        # ── Vista collassata (comportamento originale) ──
+        # Vista collassata: un nodo per camera
         stats = gq.get_transition_statistics()
         activity = {a.camera_id: a for a in gq.get_camera_activity()}
         all_cams = sorted(activity)
@@ -339,8 +339,7 @@ def render_camera_graph(
     # Evidenzia gli archi che fanno parte di un percorso richiesto
     if highlight_path:
         path_pairs = {
-            (highlight_path[i], highlight_path[i + 1])
-            for i in range(len(highlight_path) - 1)
+            (highlight_path[i], highlight_path[i + 1]) for i in range(len(highlight_path) - 1)
         }
         nid_to_cam = {n["id"]: n["camera_id"] for n in gq.nodes} if group_by_date else {}
         for edge in net.edges:

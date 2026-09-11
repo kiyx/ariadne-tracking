@@ -194,8 +194,7 @@ def _cluster_clusters(
 ) -> list[list[int]]:
     """Fusione di cluster con complete linkage sulla distanza originale.
 
-    Usa la distanza massima tra coppie di punti dei due cluster, senza
-    mediare gli embedding: più conservativo e meno soggetto a blurring.
+    La distanza tra due cluster è la massima distanza tra le loro coppie di punti.
     """
     if len(clusters_list) <= 1:
         return clusters_list
@@ -234,7 +233,6 @@ def build_global_graph(
     threshold_cross_day: float,
 ) -> dict:
     """Costruisce il grafo diretto globale con clustering 3-fasi."""
-    # 1. Lista nodi: ogni tracklet diventa un nodo
     nodes: list[dict] = []
     embeddings: list[torch.Tensor] = []
 
@@ -274,17 +272,16 @@ def build_global_graph(
 
     log.info("Grafo globale: %d tracklet da %d video.", n, len(video_names))
 
-    # 2. Similarità coseno tra tutti gli embedding
+    # Similarità coseno tra tutti gli embedding
     emb_matrix = torch.stack(embeddings)
     emb_matrix = F.normalize(emb_matrix, p=2, dim=1)
     sim_matrix = torch.mm(emb_matrix, emb_matrix.t()).numpy()
 
-    # 3. Distanza = 1 - similarità
     dist_matrix = 1.0 - sim_matrix
     np.fill_diagonal(dist_matrix, 0.0)
 
-    # 3b. Cannot-link: tracklet dello stesso video con overlap temporale non possono
-    # essere la stessa persona.
+    # Cannot-link: due tracklet dello stesso video con overlap temporale non
+    # possono essere la stessa persona.
     cannot_link_penalty = CANNOT_LINK_PENALTY
     for i in range(n):
         for j in range(i + 1, n):
@@ -338,15 +335,13 @@ def build_global_graph(
 
     clusters: dict[int, list[int]] = {i + 1: c for i, c in enumerate(final_clusters)}
 
-    # 4. Genera archi diretti ordinati per tempo
+    # Archi diretti ordinati per tempo
     edges: list[dict] = []
     identities: dict[str, list[dict]] = {}
-    identity_counter = 0
 
-    for _label, member_indices in sorted(clusters.items()):
+    for identity_counter, (_label, member_indices) in enumerate(sorted(clusters.items()), start=1):
         members_sorted = sorted(member_indices, key=lambda i: nodes[i]["time"])
 
-        identity_counter += 1
         identity_id = f"ID_{identity_counter:03d}"
 
         identity_members = []
@@ -366,7 +361,6 @@ def build_global_graph(
 
         identities[identity_id] = identity_members
 
-        # Collega ogni coppia consecutiva senza assumere una topologia fisica.
         for a, b in pairwise(members_sorted):
             node_a, node_b = nodes[a], nodes[b]
             time_gap = node_b["time"] - node_a["time"]
@@ -388,7 +382,7 @@ def build_global_graph(
                 }
             )
 
-    # 5. Nodi del grafo: un nodo per ogni video-telecamera
+    # Un nodo del grafo per ogni video-telecamera
     graph_nodes: dict[str, dict] = {}
     for node in nodes:
         nid = node["node_id"]
@@ -408,7 +402,7 @@ def build_global_graph(
             }
         )
 
-    # 6. Statistiche
+    # Statistiche
     n_singleton = sum(1 for m in clusters.values() if len(m) == 1)
     n_multi = sum(1 for m in clusters.values() if len(m) > 1)
     n_cross = sum(
@@ -524,13 +518,11 @@ def main() -> None:
     output_dir.mkdir(parents=True, exist_ok=True)
     t_start = time.time()
 
-    # 1. Carica embedding
     all_embeddings = load_all_embeddings(input_dir)
     if not all_embeddings:
         log.error("Nessun embedding trovato in %s", input_dir)
         sys.exit(1)
 
-    # 2. Carica metadati temporali
     all_video_names = list(all_embeddings.keys())
     all_times = load_tracklet_times(input_dir, all_video_names)
     log.info(
@@ -539,10 +531,9 @@ def main() -> None:
         len(all_video_names),
     )
 
-    # 2b. Range temporali per cannot-link
+    # Range temporali per il cannot-link
     all_time_ranges = load_tracklet_time_ranges(input_dir, all_video_names)
 
-    # 3. Costruisci grafo globale
     graph = build_global_graph(
         video_names=all_video_names,
         all_embeddings=all_embeddings,
@@ -553,7 +544,6 @@ def main() -> None:
         threshold_cross_day=args.threshold_cross_day,
     )
 
-    # 4. Salva grafo globale
     out_path = output_dir / "global_graph.json"
     out_path.write_text(
         json.dumps(graph, indent=2, ensure_ascii=False),
